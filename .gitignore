@@ -31,5 +31,4 @@ uv.lock
 .omc/
 
 # DAG files generated during development/testing
-dags/*.py
-!dags/.gitkeep
+dags/
