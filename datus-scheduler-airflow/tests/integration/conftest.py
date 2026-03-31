@@ -36,7 +36,9 @@ from datus_scheduler_core.config import AirflowConfig
 
 AIRFLOW_URL = os.environ.get("AIRFLOW_URL", "http://localhost:8080/api/v1")
 AIRFLOW_USER = os.environ.get("AIRFLOW_USER", "admin")
-AIRFLOW_PASSWORD = os.environ.get("AIRFLOW_PASSWORD", "admin123")
+AIRFLOW_PASSWORD = os.environ.get("AIRFLOW_PASSWORD")
+if not AIRFLOW_PASSWORD:
+    pytest.skip("AIRFLOW_PASSWORD env var not set", allow_module_level=True)
 
 # Default dags dir: the ./dags folder next to docker-compose.yml
 _THIS_DIR = Path(__file__).parent.parent.parent  # datus-airflow/

@@ -9,9 +9,12 @@ ships with every Airflow installation.
 """
 
 import json
+import logging
 import textwrap
 from datetime import datetime, timezone
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 _SPARK_DAG_TEMPLATE = textwrap.dedent(
@@ -180,6 +183,12 @@ def render_spark_dag_source(
     Returns:
         A string containing valid Python source code for an Airflow DAG file.
     """
+    logger.warning(
+        "Rendering Spark DAG '%s' with inline script execution (exec()). "
+        "Ensure the spark_script source is trusted.",
+        dag_id,
+    )
+
     config_payload = {
         "spark_script": spark_script,
         "spark_master": spark_master or "local[*]",
@@ -342,13 +351,20 @@ def render_dag_source(
     Returns:
         A string containing valid Python source code for an Airflow DAG file.
     """
+    # Warn if db_connection contains a raw URL with potential credentials
+    if db_connection and "url" in db_connection:
+        url = db_connection["url"]
+        if "@" in str(url) and "://" in str(url):
+            logger.warning(
+                "db_connection contains a URL with possible inline credentials. "
+                "Consider using conn_id (Airflow Connection) instead to avoid writing secrets to DAG files."
+            )
+
     config_payload = {
         "sql": sql,
         "db_connection": db_connection or {},
     }
     config_json = json.dumps(config_payload, ensure_ascii=False, indent=4)
-    # Indent the JSON block to align with the assignment
-    config_json_indented = config_json.replace("\n", "\n")
 
     effective_start = start_date or datetime(2024, 1, 1, tzinfo=timezone.utc)
     end_date_repr = (
@@ -362,7 +378,7 @@ def render_dag_source(
     return _DAG_TEMPLATE.format(
         job_name=job_name,
         built_at=datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        config_json=config_json_indented,
+        config_json=config_json,
         dag_id_repr=repr(dag_id),
         description_repr=repr(description or f"Datus job: {job_name}"),
         schedule_repr=repr(effective_schedule),

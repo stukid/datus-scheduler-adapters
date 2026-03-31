@@ -90,7 +90,7 @@ class SchedulerAdapterRegistry:
     @classmethod
     def _try_load_adapter(cls, platform: str) -> None:
         """Attempt to dynamically import ``datus_{platform}`` and call ``register()``."""
-        module_name = f"datus_{platform}"
+        module_name = f"datus_scheduler_{platform}"
         try:
             module = importlib.import_module(module_name)
             if hasattr(module, "register"):

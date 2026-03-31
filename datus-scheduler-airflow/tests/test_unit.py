@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from datus_scheduler_airflow.adapter import AirflowSchedulerAdapter, _map_run_status
-from datus_scheduler_airflow.dag_template import render_dag_source
+from datus_scheduler_airflow.dag_template import render_dag_source, render_spark_dag_source, render_sparksql_dag_source
 from datus_scheduler_core.config import AirflowConfig
 from datus_scheduler_core.exceptions import (
     SchedulerJobConflictError,
@@ -392,3 +392,194 @@ class TestSubmitJobMocked:
 
         with pytest.raises(SchedulerJobNotFoundError):
             adp.delete_job("nonexistent")
+
+    def test_update_job_overwrites_file(self, tmp_path: Path, sample_payload: SchedulerJobPayload) -> None:
+        adp = self._make_adapter(tmp_path)
+        # Write an initial DAG file
+        dag_file = tmp_path / "daily_report.py"
+        dag_file.write_text("# old content")
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "dag_id": "daily_report",
+            "dag_display_name": "daily_report",
+            "is_paused": False,
+            "schedule_interval": "0 8 * * *",
+        }
+        adp._session.get.return_value = mock_resp
+
+        result = adp.update_job("daily_report", sample_payload)
+        assert result.job_id == "daily_report"
+        # File should be overwritten with new content
+        assert "# old content" not in dag_file.read_text()
+        assert "daily_report" in dag_file.read_text()
+
+    def test_list_job_runs_returns_runs(self, tmp_path: Path) -> None:
+        adp = self._make_adapter(tmp_path)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "dag_runs": [
+                {
+                    "dag_run_id": "run_1",
+                    "state": "success",
+                    "start_date": "2024-01-01T00:00:00Z",
+                    "end_date": "2024-01-01T01:00:00Z",
+                },
+                {
+                    "dag_run_id": "run_2",
+                    "state": "running",
+                    "start_date": "2024-01-02T00:00:00Z",
+                    "end_date": None,
+                },
+            ]
+        }
+        adp._session.get.return_value = mock_resp
+
+        runs = adp.list_job_runs("daily_report")
+        assert len(runs) == 2
+        assert runs[0].run_id == "run_1"
+        assert runs[0].status == RunStatus.SUCCESS
+        assert runs[1].status == RunStatus.RUNNING
+
+    def test_list_job_runs_raises_not_found(self, tmp_path: Path) -> None:
+        adp = self._make_adapter(tmp_path)
+        not_found = MagicMock()
+        not_found.status_code = 404
+        adp._session.get.return_value = not_found
+
+        with pytest.raises(SchedulerJobNotFoundError):
+            adp.list_job_runs("nonexistent")
+
+    def test_to_dag_id_rejects_path_traversal(self) -> None:
+        """dag_id with path traversal characters must be rejected."""
+        from datus_scheduler_core.exceptions import SchedulerException as _SE
+
+        with pytest.raises(_SE, match="unsafe characters"):
+            AirflowSchedulerAdapter._to_dag_id("../etc/passwd")
+
+        with pytest.raises(_SE, match="unsafe characters"):
+            AirflowSchedulerAdapter._to_dag_id("dag/with/slash")
+
+
+class TestSparkDagTemplate:
+    def test_renders_valid_python(self) -> None:
+        source = render_spark_dag_source(
+            dag_id="spark_test",
+            job_name="Spark Test",
+            spark_script="rdd = sc.parallelize([1,2,3])\nprint(rdd.count())",
+        )
+        compile(source, "<generated>", "exec")
+
+    def test_dag_id_in_source(self) -> None:
+        source = render_spark_dag_source(
+            dag_id="my_spark_dag",
+            job_name="My Spark",
+            spark_script="print('hello')",
+        )
+        assert "'my_spark_dag'" in source or '"my_spark_dag"' in source
+
+    def test_script_embedded_in_config(self) -> None:
+        script = "rdd = sc.parallelize(range(100))"
+        source = render_spark_dag_source(
+            dag_id="d",
+            job_name="d",
+            spark_script=script,
+        )
+        assert script in source
+
+    def test_none_schedule_renders_none(self) -> None:
+        source = render_spark_dag_source(
+            dag_id="d",
+            job_name="d",
+            spark_script="pass",
+            schedule=None,
+        )
+        assert "schedule=None" in source
+
+    def test_cron_schedule_quoted(self) -> None:
+        source = render_spark_dag_source(
+            dag_id="d",
+            job_name="d",
+            spark_script="pass",
+            schedule="0 6 * * 1",
+        )
+        assert "'0 6 * * 1'" in source or '"0 6 * * 1"' in source
+
+    def test_string_none_schedule_renders_none(self) -> None:
+        source = render_spark_dag_source(
+            dag_id="d",
+            job_name="d",
+            spark_script="pass",
+            schedule="None",
+        )
+        assert "schedule=None" in source
+        assert "schedule='None'" not in source
+
+
+class TestSparkSqlDagTemplate:
+    def test_renders_valid_python(self) -> None:
+        source = render_sparksql_dag_source(
+            dag_id="sparksql_test",
+            job_name="SparkSQL Test",
+            sql="SELECT 1 AS value",
+        )
+        compile(source, "<generated>", "exec")
+
+    def test_dag_id_in_source(self) -> None:
+        source = render_sparksql_dag_source(
+            dag_id="my_sparksql_dag",
+            job_name="My SparkSQL",
+            sql="SELECT 1",
+        )
+        assert "'my_sparksql_dag'" in source or '"my_sparksql_dag"' in source
+
+    def test_sql_embedded_in_config(self) -> None:
+        sql = "SELECT id, name FROM users WHERE active = 1"
+        source = render_sparksql_dag_source(
+            dag_id="d",
+            job_name="d",
+            sql=sql,
+        )
+        assert sql in source
+
+    def test_none_schedule_renders_none(self) -> None:
+        source = render_sparksql_dag_source(
+            dag_id="d",
+            job_name="d",
+            sql="SELECT 1",
+            schedule=None,
+        )
+        assert "schedule=None" in source
+
+    def test_cron_schedule_quoted(self) -> None:
+        source = render_sparksql_dag_source(
+            dag_id="d",
+            job_name="d",
+            sql="SELECT 1",
+            schedule="30 2 * * *",
+        )
+        assert "'30 2 * * *'" in source or '"30 2 * * *"' in source
+
+    def test_string_none_schedule_renders_none(self) -> None:
+        source = render_sparksql_dag_source(
+            dag_id="d",
+            job_name="d",
+            sql="SELECT 1",
+            schedule="None",
+        )
+        assert "schedule=None" in source
+        assert "schedule='None'" not in source
+
+    def test_end_date_rendered(self) -> None:
+        from datetime import datetime, timezone
+
+        end = datetime(2025, 12, 31, tzinfo=timezone.utc)
+        source = render_sparksql_dag_source(
+            dag_id="d",
+            job_name="d",
+            sql="SELECT 1",
+            end_date=end,
+        )
+        assert "2025" in source and "12" in source and "31" in source

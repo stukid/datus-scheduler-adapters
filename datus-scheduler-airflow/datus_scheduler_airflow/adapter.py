@@ -100,8 +100,17 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
         """Derive a valid Airflow dag_id from a job name.
 
         Replaces spaces and hyphens with underscores and lowercases everything.
+        Raises ``SchedulerException`` if the result contains unsafe characters.
         """
-        return job_name.strip().lower().replace(" ", "_").replace("-", "_")
+        import re
+
+        dag_id = job_name.strip().lower().replace(" ", "_").replace("-", "_")
+        if not re.match(r"^[a-z0-9_\u4e00-\u9fff]+$", dag_id):
+            raise SchedulerException(
+                f"Invalid job_name '{job_name}': derived dag_id '{dag_id}' contains unsafe characters. "
+                "Only letters, digits, underscores, and CJK characters are allowed."
+            )
+        return dag_id
 
     def _dag_file_path(self, dag_id: str) -> Path:
         return Path(self._config.dags_folder) / f"{dag_id}.py"
@@ -341,14 +350,20 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
         # Step 1: Pause to prevent new runs while we clean up
         try:
             self._session.patch(f"/dags/{job_id}", json={"is_paused": True})
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Could not pause DAG '%s' before deletion: %s", job_id, exc)
 
         # Step 2: Remove the DAG file so the scheduler won't re-import it
         self._remove_dag_file(job_id)
 
         # Step 3: Wait for the scheduler to mark the DAG as inactive
-        self._wait_for_dag_inactive(job_id, max_wait=self._config.dag_discovery_timeout)
+        inactive = self._wait_for_dag_inactive(job_id, max_wait=self._config.dag_discovery_timeout)
+        if not inactive:
+            logger.warning(
+                "DAG '%s' did not become inactive within %ds; proceeding with DELETE anyway.",
+                job_id,
+                self._config.dag_discovery_timeout,
+            )
 
         # Step 4: Remove the DB record.
         # Airflow's DELETE endpoint checks dag_bag (in-memory cache) which may refresh
