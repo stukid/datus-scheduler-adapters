@@ -112,7 +112,7 @@ _DAG_TEMPLATE = textwrap.dedent(
         sql: str = cfg["sql"]
         db_connection: dict = cfg.get("db_connection") or {{}}
 
-        print("[Datus] Running SQL: " + sql)
+        print("[Datus] Running SQL: " + sql[:200])
 
         connection_url: str | None = _resolve_connection_url(db_connection)
         if connection_url:
@@ -122,18 +122,18 @@ _DAG_TEMPLATE = textwrap.dedent(
             with engine.connect() as conn:
                 result = conn.execute(text(sql))
                 columns = list(result.keys())
-                rows = result.fetchall()
+                rows = result.fetchmany(50)
+                has_more = bool(result.fetchone())
             row_count = len(rows)
-            print("[Datus] SQL completed. rows=" + str(row_count))
+            print("[Datus] SQL completed. preview_rows=" + str(row_count) + (", has_more=True" if has_more else ""))
 
-            # Print column headers and first 50 rows as preview
-            preview_limit = min(row_count, 50)
+            # Print column headers and fetched rows as preview
             if columns:
                 print("[Datus] Columns: " + " | ".join(str(c) for c in columns))
-            for i, row in enumerate(rows[:preview_limit]):
+            for i, row in enumerate(rows):
                 print("[Datus] Row " + str(i + 1) + ": " + " | ".join(str(v) for v in row))
-            if row_count > preview_limit:
-                print("[Datus] ... (" + str(row_count - preview_limit) + " more rows)")
+            if has_more:
+                print("[Datus] ... (more rows available, preview limited to 50)")
 
             return {{"status": "success", "row_count": row_count}}
 

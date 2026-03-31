@@ -224,6 +224,13 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
         job_type = (payload.extra or {}).get("job_type", "sql")
         dag_id = self._to_dag_id(payload.job_name)
 
+        # Reject unsupported datus_command mode early
+        if payload.datus_command and not payload.sql:
+            raise SchedulerException(
+                "datus_command execution mode is not yet supported by AirflowSchedulerAdapter. "
+                "Use sql mode instead."
+            )
+
         # Conflict detection
         if self.get_job(dag_id) is not None:
             raise SchedulerJobConflictError(dag_id, self.platform_name())
@@ -335,6 +342,14 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
                 data = resp.json()
                 if not data.get("is_active", True):
                     return True
+            elif resp.status_code >= 400:
+                logger.warning(
+                    "Unexpected HTTP %d while polling DAG '%s' inactive status: %s",
+                    resp.status_code,
+                    dag_id,
+                    resp.text[:200],
+                )
+                return False
             time.sleep(interval)
         return False
 
@@ -383,6 +398,7 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
                     # dag_bag still has the entry after all retries, but the file is gone.
                     # The DAG cannot run again; accept this as a successful delete.
                     logger.debug("DELETE /dags/%s returned 400 after all retries; DAG file removed, treating as deleted.", job_id)
+                    delete_succeeded = True
                     break
             resp.raise_for_status()
 
@@ -399,6 +415,15 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
         """Re-render and overwrite the DAG file, then wait for Airflow to reload it."""
         if self.get_job(job_id) is None:
             raise SchedulerJobNotFoundError(job_id, self.platform_name())
+
+        # Enforce no-rename contract: derived dag_id must match the existing job_id
+        derived_dag_id = self._to_dag_id(payload.job_name)
+        if derived_dag_id != job_id:
+            raise SchedulerException(
+                f"Renaming is not supported by update_job. "
+                f"Derived dag_id '{derived_dag_id}' does not match existing job_id '{job_id}'. "
+                f"Use delete_job + submit_job to rename."
+            )
 
         job_type = (payload.extra or {}).get("job_type", "sql")
 
@@ -447,8 +472,8 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
                 description=payload.description,
             )
         self._write_dag_file(job_id, source)
-        # Airflow reloads existing DAG files automatically; wait for a brief moment
-        time.sleep(self._config.dag_discovery_poll_interval)
+        # Airflow reloads existing DAG files automatically; brief wait for scheduler scan
+        time.sleep(min(self._config.dag_discovery_poll_interval, 2))
 
         job = self.get_job(job_id)
         if job is None:
@@ -527,5 +552,5 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
     def close(self) -> None:
         try:
             self._session.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Error closing Airflow HTTP session: %s", exc)
