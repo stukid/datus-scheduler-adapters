@@ -1,0 +1,53 @@
+version: '3.8'
+name: datus-scheduler-airflow
+
+# Minimal Airflow setup for datus-scheduler-airflow integration testing.
+# Runs everything in a single container using Airflow's "standalone" mode
+# (webserver + scheduler + triggerer combined).
+
+services:
+  airflow:
+    build: .
+    environment:
+      # DB — SQLite for local testing (standalone auto-selects SequentialExecutor)
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+
+      # DAG behaviour
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+
+      # REST API auth
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+
+      # Speed up DAG discovery for tests
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "5"
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: "0"
+
+      # Web server
+      AIRFLOW__WEBSERVER__SECRET_KEY: datus-test-secret-key
+
+      # Auto-create admin user on first start
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin123
+      _AIRFLOW_WWW_USER_FIRSTNAME: Admin
+      _AIRFLOW_WWW_USER_LASTNAME: User
+      _AIRFLOW_WWW_USER_EMAIL: admin@example.com
+      _AIRFLOW_WWW_USER_ROLE: Admin
+
+    volumes:
+      # DAG files written by the adapter land here
+      - ./dags:/opt/airflow/dags
+
+    ports:
+      - "8080:8080"
+
+    command: standalone
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s

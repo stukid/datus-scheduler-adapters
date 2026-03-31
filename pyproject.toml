@@ -1,0 +1,29 @@
+# Workspace configuration for datus-scheduler-adapters (development only).
+# End users install individual packages:
+#   pip install datus-scheduler-airflow
+#   pip install datus-dolphinscheduler
+#   pip install datus-azkaban
+
+[project]
+name = "datus-scheduler-adapters"
+version = "0.1.0"
+description = "Datus scheduler adapters workspace (development only)"
+requires-python = ">=3.12"
+license = {text = "Apache-2.0"}
+
+[tool.uv.workspace]
+members = ["datus-scheduler-core", "datus-scheduler-airflow"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.1.0",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "B", "I"]

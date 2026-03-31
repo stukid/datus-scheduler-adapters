@@ -1,0 +1,51 @@
+[project]
+name = "datus-scheduler-airflow"
+version = "0.1.0"
+description = "Apache Airflow scheduler adapter for Datus"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "DatusAI", email = "support@datus.ai"}
+]
+keywords = ["datus", "scheduler", "airflow", "adapter"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "datus-scheduler-core>=0.1.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Datus-ai/datus-scheduler-adapters"
+Repository = "https://github.com/Datus-ai/datus-scheduler-adapters"
+
+[project.entry-points."datus.schedulers"]
+airflow = "datus_scheduler_airflow:register"
+
+[tool.uv.sources]
+datus-scheduler-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["datus_scheduler_airflow"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests requiring a live Airflow instance",
+    "unit: marks tests as unit tests (no external dependencies)",
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
