@@ -100,6 +100,9 @@ _DAG_TEMPLATE = textwrap.dedent(
 
             conn = BaseHook.get_connection(conn_id)
             url = conn.get_uri()
+            # Airflow returns "postgres://" but SQLAlchemy 1.4+ requires "postgresql://"
+            if url.startswith("postgres://"):
+                url = "postgresql://" + url[len("postgres://"):]
             print("[Datus] Using Airflow connection: " + conn_id)
             return url
 
