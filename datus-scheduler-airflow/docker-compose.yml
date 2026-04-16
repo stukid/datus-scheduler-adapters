@@ -39,6 +39,8 @@ services:
     volumes:
       # DAG files written by the adapter land here
       - ./dags:/opt/airflow/dags
+      # Optional: mount external data directory (e.g. DuckDB files)
+      # - /path/to/your/data:/opt/airflow/data
 
     ports:
       - "8080:8080"

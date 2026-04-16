@@ -99,6 +99,14 @@ _DAG_TEMPLATE = textwrap.dedent(
             from airflow.hooks.base import BaseHook  # noqa: PLC0415
 
             conn = BaseHook.get_connection(conn_id)
+            # DuckDB: Airflow round-trips the URI through component parsing,
+            # which can corrupt "duckdb:///path".  Rebuild from conn fields.
+            if conn.conn_type == "duckdb":
+                db_path = (conn.schema or conn.host or "").lstrip("/")
+                # 4 slashes = absolute path (same convention as SQLite)
+                url = "duckdb:////" + db_path
+                print("[Datus] Using Airflow connection: " + conn_id + " (duckdb)")
+                return url
             url = conn.get_uri()
             # Airflow returns "postgres://" but SQLAlchemy 1.4+ requires "postgresql://"
             if url.startswith("postgres://"):
