@@ -685,3 +685,67 @@ class TestDuckDBDagTemplate:
             "extra_dejson": {},
         })
         assert url == "duckdb:////data/primary.duckdb"
+
+    def test_duckdb_empty_path_raises(self) -> None:
+        """Empty schema and host should raise, not produce ambiguous duckdb:///."""
+        with pytest.raises(ValueError, match="no database path"):
+            self._call_resolve_url({
+                "conn_type": "duckdb", "schema": "",
+                "host": "", "extra_dejson": {},
+            })
+
+    def test_duckdb_query_params_special_chars_encoded(self) -> None:
+        """Reserved characters in extras must be percent-encoded."""
+        url = self._call_resolve_url({
+            "conn_type": "duckdb", "schema": "",
+            "host": "/data/foo.duckdb",
+            "extra_dejson": {"path": "/tmp/a b", "filter": "x=1&y=2"},
+        })
+        assert "duckdb:////data/foo.duckdb?" in url
+        # Values must be percent-encoded, not raw
+        assert "a b" not in url        # space must be encoded
+        assert "x=1&y=2" not in url    # raw & must be encoded
+        from urllib.parse import parse_qs, urlparse
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        assert params["path"] == ["/tmp/a b"]
+        assert params["filter"] == ["x=1&y=2"]
+
+    @staticmethod
+    def _call_resolve_url_with_conn(conn_obj) -> str:
+        """Like _call_resolve_url but accepts a pre-built conn object."""
+        source = render_dag_source(
+            dag_id="test", job_name="test", sql="SELECT 1",
+            db_connection={"conn_id": "test_conn"},
+            schedule=None, start_date=None, end_date=None, description=None,
+        )
+        mock_base_hook = MagicMock()
+        mock_base_hook.get_connection.return_value = conn_obj
+
+        airflow_mocks = {
+            "airflow": MagicMock(),
+            "airflow.hooks": MagicMock(),
+            "airflow.hooks.base": MagicMock(BaseHook=mock_base_hook),
+            "airflow.operators": MagicMock(),
+            "airflow.operators.python": MagicMock(),
+        }
+        ns: dict = {}
+        with patch.dict(sys.modules, airflow_mocks):
+            exec(compile(source, "<test>", "exec"), ns)  # noqa: S102
+            return ns["_resolve_connection_url"]({"conn_id": "test_conn"})
+
+    def test_postgres_connection_normalized(self) -> None:
+        """Non-DuckDB path: postgres:// must be normalized to postgresql://."""
+        conn = MagicMock()
+        conn.conn_type = "postgres"
+        conn.get_uri.return_value = "postgres://user:pass@host:5432/mydb"
+        url = self._call_resolve_url_with_conn(conn)
+        assert url == "postgresql://user:pass@host:5432/mydb"
+
+    def test_mysql_connection_passthrough(self) -> None:
+        """Non-DuckDB, non-postgres connections pass through unchanged."""
+        conn = MagicMock()
+        conn.conn_type = "mysql"
+        conn.get_uri.return_value = "mysql://user:pass@host:3306/mydb"
+        url = self._call_resolve_url_with_conn(conn)
+        assert url == "mysql://user:pass@host:3306/mydb"
