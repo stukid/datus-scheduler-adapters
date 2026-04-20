@@ -10,6 +10,7 @@ Mark: ``@pytest.mark.integration``
 Run:  ``uv run pytest datus-airflow/tests/integration/ -v -m integration``
 """
 
+import os
 import time
 import uuid
 from typing import List
@@ -296,3 +297,106 @@ class TestDeleteJob:
     def test_delete_nonexistent_raises(self, adapter: AirflowSchedulerAdapter) -> None:
         with pytest.raises(SchedulerJobNotFoundError):
             adapter.delete_job("nonexistent_dag_xyz_88888")
+
+
+# ── Multi-tenant shared-root integration ─────────────────────────────────
+
+
+class TestMultiTenantMode:
+    """End-to-end: two Datus instances share one Airflow via dags_folder_root.
+
+    Each instance derives its own subdirectory and dag_id prefix from
+    ``project_name``, so submitting the same ``job_name`` from both instances
+    produces two distinct DAGs that don't collide and that ``list_jobs``
+    correctly scopes to their respective owners.
+    """
+
+    def _make_tenant_adapter(
+        self,
+        dags_folder_root,
+        airflow_url: str,
+        airflow_user: str,
+        airflow_password: str,
+        project_name: str,
+    ) -> AirflowSchedulerAdapter:
+        from datus_scheduler_core.config import AirflowConfig
+
+        cfg = AirflowConfig(
+            name=f"airflow_test_{project_name}",
+            type="airflow",
+            api_base_url=airflow_url,
+            username=airflow_user,
+            password=airflow_password,
+            dags_folder_root=str(dags_folder_root),
+            project_name=project_name,
+            dag_discovery_timeout=90,
+            dag_discovery_poll_interval=5,
+        )
+        return AirflowSchedulerAdapter(cfg)
+
+    def test_two_tenants_dont_collide(self, dags_folder, airflow_ready: bool) -> None:
+        airflow_url = os.environ.get("AIRFLOW_URL", "http://localhost:8080/api/v1")
+        airflow_user = os.environ.get("AIRFLOW_USER", "admin")
+        airflow_password = os.environ["AIRFLOW_PASSWORD"]
+
+        # Use a unique suffix so repeated runs don't pollute the shared ./dags/
+        suffix = uuid.uuid4().hex[:6]
+        team_a = f"tenant_a_{suffix}"
+        team_b = f"tenant_b_{suffix}"
+
+        adp_a = self._make_tenant_adapter(dags_folder, airflow_url, airflow_user, airflow_password, team_a)
+        adp_b = self._make_tenant_adapter(dags_folder, airflow_url, airflow_user, airflow_password, team_b)
+
+        job_ids_to_cleanup: list[tuple[AirflowSchedulerAdapter, str]] = []
+        try:
+            # Same *logical* job_name from both tenants must land in separate
+            # DAG subdirectories with distinct dag_ids.
+            job_name = "daily_report"
+            payload = SchedulerJobPayload(
+                job_name=job_name,
+                sql="SELECT 1 AS value",
+                db_connection={"url": "sqlite:///:memory:"},
+                schedule=None,
+                description="multi-tenant integration test",
+            )
+
+            job_a = adp_a.submit_job(payload)
+            job_ids_to_cleanup.append((adp_a, job_a.job_id))
+
+            job_b = adp_b.submit_job(payload)
+            job_ids_to_cleanup.append((adp_b, job_b.job_id))
+
+            # dag_ids must differ and carry the tenant prefix
+            assert job_a.job_id == f"{team_a}__{job_name}"
+            assert job_b.job_id == f"{team_b}__{job_name}"
+            assert job_a.job_id != job_b.job_id
+
+            # Files landed under distinct subdirectories
+            assert (dags_folder / team_a / f"{job_a.job_id}.py").exists()
+            assert (dags_folder / team_b / f"{job_b.job_id}.py").exists()
+
+            # Each tenant's list_jobs returns only their own DAGs
+            a_ids = {j.job_id for j in adp_a.list_jobs()}
+            b_ids = {j.job_id for j in adp_b.list_jobs()}
+            assert job_a.job_id in a_ids
+            assert job_a.job_id not in b_ids
+            assert job_b.job_id in b_ids
+            assert job_b.job_id not in a_ids
+
+            # No cross-leak: every DAG that A sees must bear A's prefix, and same for B
+            assert all(d.startswith(f"{team_a}__") for d in a_ids)
+            assert all(d.startswith(f"{team_b}__") for d in b_ids)
+
+            # Conflict detection is per-tenant: submitting the same job_name
+            # again from the SAME adapter must raise, but the OTHER adapter's
+            # identical job_name has already succeeded above.
+            with pytest.raises(SchedulerJobConflictError):
+                adp_a.submit_job(payload)
+        finally:
+            for adp, dag_id in job_ids_to_cleanup:
+                try:
+                    adp.delete_job(dag_id)
+                except Exception:
+                    pass
+            adp_a.close()
+            adp_b.close()
