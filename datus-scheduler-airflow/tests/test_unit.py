@@ -907,10 +907,10 @@ class TestAirflowConfigMultiTenant:
             **self._base_kwargs(
                 dags_folder_root=str(tmp_path),
                 project_name="team-a",
-                dag_id_prefix="custom_",
+                dag_id_prefix="custom__",
             )
         )
-        assert cfg.dag_id_prefix == "custom_"
+        assert cfg.dag_id_prefix == "custom__"
 
     def test_invalid_project_name_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="project_name"):
@@ -941,6 +941,52 @@ class TestAirflowConfigMultiTenant:
                     dag_id_prefix="Has-Caps-And-Hyphens",
                 )
             )
+
+    @pytest.mark.parametrize("bad", ["team", "team_", "a", "_"])
+    def test_dag_id_prefix_must_end_with_double_underscore(self, tmp_path: Path, bad: str) -> None:
+        """A prefix that does not end with exactly ``__`` allows
+        startswith() leakage across tenants (e.g. prefix ``team`` matches
+        ``team_work``). The validator must enforce the ``__`` separator
+        convention for non-empty prefixes."""
+        with pytest.raises(ValueError, match="dag_id_prefix"):
+            AirflowConfig(
+                **self._base_kwargs(
+                    dags_folder=str(tmp_path),
+                    dag_id_prefix=bad,
+                )
+            )
+
+    def test_dag_id_prefix_rejects_trailing_newline(self, tmp_path: Path) -> None:
+        """re.match() with ``$`` anchors accepts a trailing newline; we use
+        fullmatch() to close that hole so log-injection-shaped inputs don't
+        sneak through validation."""
+        with pytest.raises(ValueError, match="dag_id_prefix"):
+            AirflowConfig(
+                **self._base_kwargs(
+                    dags_folder=str(tmp_path),
+                    dag_id_prefix="team__\n",
+                )
+            )
+
+    def test_project_name_rejects_trailing_newline(self, tmp_path: Path) -> None:
+        """Same fullmatch fix as dag_id_prefix, applied to project_name."""
+        with pytest.raises(ValueError, match="project_name"):
+            AirflowConfig(
+                **self._base_kwargs(
+                    dags_folder_root=str(tmp_path),
+                    project_name="team-a\n",
+                )
+            )
+
+    def test_empty_dag_id_prefix_accepted(self, tmp_path: Path) -> None:
+        """Explicit empty string disables prefixing (legacy / single-tenant)."""
+        cfg = AirflowConfig(
+            **self._base_kwargs(
+                dags_folder=str(tmp_path),
+                dag_id_prefix="",
+            )
+        )
+        assert cfg.dag_id_prefix == ""
 
 
 class TestAdapterMultiTenant:
@@ -1114,3 +1160,124 @@ class TestAdapterMultiTenant:
         # No dag_id_pattern sent to Airflow
         call_kwargs = adp._session.get.call_args.kwargs
         assert "dag_id_pattern" not in call_kwargs["params"]
+
+    def test_list_jobs_applies_status_filter_before_slice(self, tmp_path: Path) -> None:
+        """Regression: status filter must apply BEFORE offset/limit slicing,
+        otherwise a page containing mostly paused DAGs can return far fewer
+        than ``limit`` active DAGs even when plenty of active ones exist."""
+        from datus_scheduler_core.models import JobStatus
+
+        cfg = AirflowConfig(
+            name="t",
+            type="airflow",
+            api_base_url="http://localhost:8080/api/v1",
+            username="admin",
+            password="admin",
+            dags_folder_root=str(tmp_path),
+            project_name="team-a",
+        )
+        adp = self._make_adapter(cfg)
+
+        # 5 active + 5 paused, interleaved. Request 3 active.
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "dags": [
+                {"dag_id": "team_a__active_1", "is_paused": False},
+                {"dag_id": "team_a__paused_1", "is_paused": True},
+                {"dag_id": "team_a__active_2", "is_paused": False},
+                {"dag_id": "team_a__paused_2", "is_paused": True},
+                {"dag_id": "team_a__active_3", "is_paused": False},
+                {"dag_id": "team_a__paused_3", "is_paused": True},
+                {"dag_id": "team_a__active_4", "is_paused": False},
+                {"dag_id": "team_a__paused_4", "is_paused": True},
+                {"dag_id": "team_a__active_5", "is_paused": False},
+                {"dag_id": "team_a__paused_5", "is_paused": True},
+            ]
+        }
+        adp._session.get.return_value = resp
+
+        jobs = adp.list_jobs(status=JobStatus.ACTIVE, limit=3)
+        assert len(jobs) == 3
+        assert all(j.status == JobStatus.ACTIVE for j in jobs)
+        assert [j.job_id for j in jobs] == [
+            "team_a__active_1",
+            "team_a__active_2",
+            "team_a__active_3",
+        ]
+
+    @pytest.mark.parametrize(
+        "method_name, extra_args",
+        [
+            ("trigger_job", ()),
+            ("pause_job", ()),
+            ("resume_job", ()),
+            ("delete_job", ()),
+            ("list_job_runs", ()),
+            ("get_run_log", ("run_xyz",)),
+        ],
+    )
+    def test_tenant_guard_rejects_foreign_dag_id(
+        self, tmp_path: Path, method_name: str, extra_args: tuple
+    ) -> None:
+        """Exact-id operations must refuse to act on another tenant's DAG.
+
+        Without this guard a caller that knows (or guesses) another tenant's
+        dag_id could trigger, pause, or delete it, bypassing the prefix
+        isolation applied to list_jobs.
+        """
+        from datus_scheduler_core.exceptions import SchedulerJobNotFoundError
+
+        cfg = AirflowConfig(
+            name="t",
+            type="airflow",
+            api_base_url="http://localhost:8080/api/v1",
+            username="admin",
+            password="admin",
+            dags_folder_root=str(tmp_path),
+            project_name="team-a",
+        )
+        adp = self._make_adapter(cfg)
+
+        method = getattr(adp, method_name)
+        with pytest.raises(SchedulerJobNotFoundError):
+            method("team_b__foreign_dag", *extra_args)
+
+        # Guard short-circuits before any HTTP traffic.
+        adp._session.post.assert_not_called()
+        adp._session.patch.assert_not_called()
+        adp._session.delete.assert_not_called()
+        adp._session.get.assert_not_called()
+
+    def test_tenant_guard_get_job_returns_none_for_foreign(self, tmp_path: Path) -> None:
+        """get_job preserves its Optional[...] contract: foreign ids are
+        reported as missing rather than raising, so callers can use it as an
+        existence probe."""
+        cfg = AirflowConfig(
+            name="t",
+            type="airflow",
+            api_base_url="http://localhost:8080/api/v1",
+            username="admin",
+            password="admin",
+            dags_folder_root=str(tmp_path),
+            project_name="team-a",
+        )
+        adp = self._make_adapter(cfg)
+
+        assert adp.get_job("team_b__foreign_dag") is None
+        adp._session.get.assert_not_called()
+
+    def test_tenant_guard_get_job_run_returns_none_for_foreign(self, tmp_path: Path) -> None:
+        cfg = AirflowConfig(
+            name="t",
+            type="airflow",
+            api_base_url="http://localhost:8080/api/v1",
+            username="admin",
+            password="admin",
+            dags_folder_root=str(tmp_path),
+            project_name="team-a",
+        )
+        adp = self._make_adapter(cfg)
+
+        assert adp.get_job_run("team_b__foreign_dag", "run_xyz") is None
+        adp._session.get.assert_not_called()

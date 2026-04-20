@@ -10,13 +10,15 @@ from pydantic import BaseModel, Field, model_validator
 
 # Filesystem-safe project name. Mirrors the regex used by Datus'
 # ``_validate_project_name`` so a name derived from ``agent.project_name``
-# always round-trips through this config.
-_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+# always round-trips through this config. Matched with ``fullmatch`` so a
+# trailing newline is rejected (``re.match`` would accept it).
+_PROJECT_NAME_RE = re.compile(r"[A-Za-z0-9_.\-]+")
 
-# dag_id_prefix must match Airflow's dag_id character class. Airflow allows
-# letters, digits, dashes, dots, and underscores; we further restrict to
-# [a-z0-9_] + trailing "__" separator convention.
-_DAG_ID_PREFIX_RE = re.compile(r"^[a-z0-9_]*$")
+# dag_id_prefix either is empty (prefixing disabled) or must end with the
+# ``__`` separator. Without that separator, ``startswith(prefix)`` during
+# list_jobs would let a prefix of ``team`` match ``team_work`` and leak
+# across tenants. Matched with ``fullmatch``.
+_DAG_ID_PREFIX_RE = re.compile(r"|[a-z0-9_]+__")
 
 
 class SchedulerConnectionConfig(BaseModel):
@@ -119,7 +121,7 @@ class AirflowConfig(SchedulerConnectionConfig):
                 "'dags_folder_root' (parent dir + project_name), not both."
             )
 
-        if self.project_name is not None and not _PROJECT_NAME_RE.match(self.project_name):
+        if self.project_name is not None and not _PROJECT_NAME_RE.fullmatch(self.project_name):
             raise ValueError(f"AirflowConfig.project_name {self.project_name!r} must match {_PROJECT_NAME_RE.pattern}.")
 
         # Even though the regex allows '.' and '-', path traversal via '.', '..'
@@ -135,9 +137,10 @@ class AirflowConfig(SchedulerConnectionConfig):
                 "must not be '.', '..', start with '.', or contain '..'."
             )
 
-        if self.dag_id_prefix is not None and not _DAG_ID_PREFIX_RE.match(self.dag_id_prefix):
+        if self.dag_id_prefix is not None and not _DAG_ID_PREFIX_RE.fullmatch(self.dag_id_prefix):
             raise ValueError(
-                f"AirflowConfig.dag_id_prefix {self.dag_id_prefix!r} must match {_DAG_ID_PREFIX_RE.pattern}."
+                f"AirflowConfig.dag_id_prefix {self.dag_id_prefix!r} must be empty or match "
+                f"[a-z0-9_]+__ (trailing double-underscore is required as a tenant separator)."
             )
 
         # Resolve effective dags_folder when only dags_folder_root is given.

@@ -360,8 +360,26 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
             raise SchedulerException(f"DAG '{dag_id}' disappeared immediately after discovery.")
         return job
 
+    def _owns_dag_id(self, job_id: str) -> bool:
+        """Return True if ``job_id`` belongs to this tenant.
+
+        In multi-tenant mode, exact-id operations (trigger/pause/delete/etc.)
+        must refuse to act on another tenant's DAG even if the caller happens
+        to know its id, otherwise tenancy is only enforced on listing.
+        """
+        prefix = self._config.dag_id_prefix or ""
+        return not prefix or job_id.startswith(prefix)
+
+    def _raise_if_foreign_dag_id(self, job_id: str) -> None:
+        """Hide foreign DAGs behind the same 404 surface Airflow would give
+        us for a missing id, so we don't leak existence of other tenants'
+        DAGs."""
+        if not self._owns_dag_id(job_id):
+            raise SchedulerJobNotFoundError(job_id, self.platform_name())
+
     def trigger_job(self, job_id: str, conf: Optional[Dict[str, Any]] = None) -> JobRun:
         """Trigger an immediate DAG run via POST /dags/{dag_id}/dagRuns."""
+        self._raise_if_foreign_dag_id(job_id)
         body: Dict[str, Any] = {"conf": conf or {}}
         resp = self._session.post(f"/dags/{job_id}/dagRuns", json=body)
         if resp.status_code == 404:
@@ -370,12 +388,14 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
         return self._build_job_run(resp.json(), job_id)
 
     def pause_job(self, job_id: str) -> None:
+        self._raise_if_foreign_dag_id(job_id)
         resp = self._session.patch(f"/dags/{job_id}", json={"is_paused": True})
         if resp.status_code == 404:
             raise SchedulerJobNotFoundError(job_id, self.platform_name())
         resp.raise_for_status()
 
     def resume_job(self, job_id: str) -> None:
+        self._raise_if_foreign_dag_id(job_id)
         resp = self._session.patch(f"/dags/{job_id}", json={"is_paused": False})
         if resp.status_code == 404:
             raise SchedulerJobNotFoundError(job_id, self.platform_name())
@@ -409,6 +429,7 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
         Airflow 2.x requires the DAG to be inactive (file removed + scheduler scanned) before
         the DELETE API will accept the request.
         """
+        self._raise_if_foreign_dag_id(job_id)
         if self.get_job(job_id) is None:
             raise SchedulerJobNotFoundError(job_id, self.platform_name())
 
@@ -469,6 +490,7 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
 
     def update_job(self, job_id: str, payload: SchedulerJobPayload) -> ScheduledJob:
         """Re-render and overwrite the DAG file, then wait for Airflow to reload it."""
+        self._raise_if_foreign_dag_id(job_id)
         if self.get_job(job_id) is None:
             raise SchedulerJobNotFoundError(job_id, self.platform_name())
 
@@ -539,6 +561,11 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
     # ── Status queries ─────────────────────────────────────────────────────
 
     def get_job(self, job_id: str) -> Optional[ScheduledJob]:
+        # Preserve Optional[...] contract for foreign DAGs rather than raising,
+        # so callers can use get_job() as an existence probe without having to
+        # distinguish "doesn't exist" from "isn't yours".
+        if not self._owns_dag_id(job_id):
+            return None
         resp = self._session.get(f"/dags/{job_id}")
         if resp.status_code == 404:
             return None
@@ -589,9 +616,10 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
                 jobs = [j for j in jobs if j.status == status]
             return jobs
 
-        # Multi-tenant mode: paginate through all DAGs and apply prefix
-        # filtering client-side. Apply the caller's offset/limit to the
-        # filtered view so semantics match the single-tenant branch.
+        # Multi-tenant mode: paginate through all DAGs and apply prefix +
+        # status filtering client-side *before* applying offset/limit, so
+        # list_jobs(status=ACTIVE, limit=50) can return up to 50 active DAGs
+        # even when the server's page interleaves paused ones.
         matched: List[dict] = []
         scan_offset = 0
         while True:
@@ -604,8 +632,13 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
             if not page:
                 break
             for d in page:
-                if d.get("dag_id", "").startswith(prefix):
-                    matched.append(d)
+                if not d.get("dag_id", "").startswith(prefix):
+                    continue
+                if status is not None:
+                    dag_status = JobStatus.PAUSED if d.get("is_paused", False) else JobStatus.ACTIVE
+                    if dag_status != status:
+                        continue
+                matched.append(d)
             # Stop when the server returned a short page — no more DAGs.
             if len(page) < self._LIST_SCAN_PAGE_SIZE:
                 break
@@ -616,12 +649,11 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
             scan_offset += self._LIST_SCAN_PAGE_SIZE
 
         sliced = matched[offset : offset + limit]
-        jobs = [self._build_scheduled_job(d) for d in sliced]
-        if status is not None:
-            jobs = [j for j in jobs if j.status == status]
-        return jobs
+        return [self._build_scheduled_job(d) for d in sliced]
 
     def get_job_run(self, job_id: str, run_id: str) -> Optional[JobRun]:
+        if not self._owns_dag_id(job_id):
+            return None
         resp = self._session.get(f"/dags/{job_id}/dagRuns/{run_id}")
         if resp.status_code == 404:
             return None
@@ -635,6 +667,7 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
         limit: int = 20,
         offset: int = 0,
     ) -> List[JobRun]:
+        self._raise_if_foreign_dag_id(job_id)
         params: Dict[str, Any] = {"limit": limit, "offset": offset, "order_by": "-execution_date"}
         resp = self._session.get(f"/dags/{job_id}/dagRuns", params=params)
         if resp.status_code == 404:
@@ -647,6 +680,7 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
 
     def get_run_log(self, job_id: str, run_id: str) -> str:
         """Fetch the log text for the first task instance of a DAG run."""
+        self._raise_if_foreign_dag_id(job_id)
         # Get task instances for the run
         resp = self._session.get(f"/dags/{job_id}/dagRuns/{run_id}/taskInstances")
         resp.raise_for_status()
