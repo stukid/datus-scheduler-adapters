@@ -36,7 +36,15 @@ from datus_scheduler_core.exceptions import (
     SchedulerJobNotFoundError,
     SchedulerTimeoutError,
 )
-from datus_scheduler_core.models import JobRun, JobStatus, RunStatus, ScheduledJob, SchedulerJobPayload
+from datus_scheduler_core.models import (
+    JobRun,
+    JobStatus,
+    ListJobsResult,
+    ListRunsResult,
+    RunStatus,
+    ScheduledJob,
+    SchedulerJobPayload,
+)
 
 from datus_scheduler_airflow.dag_template import render_dag_source, render_spark_dag_source, render_sparksql_dag_source
 
@@ -583,7 +591,7 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
         status: Optional[JobStatus] = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> List[ScheduledJob]:
+    ) -> ListJobsResult:
         """List DAGs registered in Airflow.
 
         When ``config.dag_id_prefix`` is set (multi-tenant mode), results are
@@ -606,20 +614,32 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
 
         if not prefix:
             # Single-tenant / legacy mode: trust the server's pagination.
+            # ``total_entries`` from Airflow reflects the full cluster, which
+            # is what the caller sees, so pass it through as ``total``.
             params: Dict[str, Any] = {"limit": limit, "offset": offset}
             if status == JobStatus.PAUSED:
                 params["only_active"] = "false"
             resp = self._session.get("/dags", params=params)
             resp.raise_for_status()
-            jobs = [self._build_scheduled_job(d) for d in resp.json().get("dags", [])]
+            body = resp.json()
+            jobs = [self._build_scheduled_job(d) for d in body.get("dags", [])]
             if status is not None:
                 jobs = [j for j in jobs if j.status == status]
-            return jobs
+            total = body.get("total_entries")
+            return ListJobsResult(
+                items=jobs,
+                total=int(total) if isinstance(total, int) else None,
+            )
 
         # Multi-tenant mode: paginate through all DAGs and apply prefix +
         # status filtering client-side *before* applying offset/limit, so
         # list_jobs(status=ACTIVE, limit=50) can return up to 50 active DAGs
         # even when the server's page interleaves paused ones.
+        #
+        # ``total`` stays None: Airflow's ``total_entries`` reports the full
+        # cluster including other tenants, which doesn't match what this
+        # caller sees. Consumers fall back to ``len(items) < limit`` for the
+        # "last page" hint.
         matched: List[dict] = []
         scan_offset = 0
         while True:
@@ -649,7 +669,10 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
             scan_offset += self._LIST_SCAN_PAGE_SIZE
 
         sliced = matched[offset : offset + limit]
-        return [self._build_scheduled_job(d) for d in sliced]
+        return ListJobsResult(
+            items=[self._build_scheduled_job(d) for d in sliced],
+            total=None,
+        )
 
     def get_job_run(self, job_id: str, run_id: str) -> Optional[JobRun]:
         if not self._owns_dag_id(job_id):
@@ -666,17 +689,24 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
         status: Optional[RunStatus] = None,
         limit: int = 20,
         offset: int = 0,
-    ) -> List[JobRun]:
+    ) -> ListRunsResult:
         self._raise_if_foreign_dag_id(job_id)
         params: Dict[str, Any] = {"limit": limit, "offset": offset, "order_by": "-execution_date"}
         resp = self._session.get(f"/dags/{job_id}/dagRuns", params=params)
         if resp.status_code == 404:
             raise SchedulerJobNotFoundError(job_id, self.platform_name())
         resp.raise_for_status()
-        runs = [self._build_job_run(d, job_id) for d in resp.json().get("dag_runs", [])]
+        body = resp.json()
+        runs = [self._build_job_run(d, job_id) for d in body.get("dag_runs", [])]
         if status is not None:
-            runs = [r for r in runs if r.status == status]
-        return runs
+            # Client-side status filtering makes ``total_entries`` wrong, so
+            # drop it to None; consumers fall back to len(items) < limit.
+            return ListRunsResult(items=[r for r in runs if r.status == status], total=None)
+        total = body.get("total_entries")
+        return ListRunsResult(
+            items=runs,
+            total=int(total) if isinstance(total, int) else None,
+        )
 
     def get_run_log(self, job_id: str, run_id: str) -> str:
         """Fetch the log text for the first task instance of a DAG run."""

@@ -210,8 +210,7 @@ def render_spark_dag_source(
         A string containing valid Python source code for an Airflow DAG file.
     """
     logger.warning(
-        "Rendering Spark DAG '%s' with inline script execution (exec()). "
-        "Ensure the spark_script source is trusted.",
+        "Rendering Spark DAG '%s' with inline script execution (exec()). Ensure the spark_script source is trusted.",
         dag_id,
     )
 
@@ -331,9 +330,7 @@ def render_sparksql_dag_source(
 
     effective_start = start_date or datetime(2024, 1, 1, tzinfo=timezone.utc)
     end_date_repr = (
-        f"datetime({end_date.year}, {end_date.month}, {end_date.day}, tzinfo=timezone.utc)"
-        if end_date
-        else "None"
+        f"datetime({end_date.year}, {end_date.month}, {end_date.day}, tzinfo=timezone.utc)" if end_date else "None"
     )
 
     effective_schedule = schedule if schedule and str(schedule).strip().lower() != "none" else None
@@ -394,9 +391,7 @@ def render_dag_source(
 
     effective_start = start_date or datetime(2024, 1, 1, tzinfo=timezone.utc)
     end_date_repr = (
-        f"datetime({end_date.year}, {end_date.month}, {end_date.day}, tzinfo=timezone.utc)"
-        if end_date
-        else "None"
+        f"datetime({end_date.year}, {end_date.month}, {end_date.day}, tzinfo=timezone.utc)" if end_date else "None"
     )
 
     effective_schedule = schedule if schedule and str(schedule).strip().lower() != "none" else None

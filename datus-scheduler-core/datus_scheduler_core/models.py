@@ -3,9 +3,28 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Generic, List, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+T = TypeVar("T")
+
+
+class PaginatedScheduledResult(BaseModel, Generic[T]):
+    """Generic paginated envelope for scheduler list_* APIs.
+
+    * ``items``: rows for the requested ``(limit, offset)`` window. Always
+      a list; empty is ``[]``.
+    * ``total``: upstream full count when known (Airflow ``total_entries``).
+      ``None`` when unknown or meaningless — e.g. when client-side filtering
+      (``dag_id_prefix``) shortens the list and the server's total no longer
+      reflects what the caller sees.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    items: List[T] = Field(default_factory=list)
+    total: Optional[int] = None
 
 
 class JobStatus(str, Enum):
@@ -104,3 +123,16 @@ class JobRun(BaseModel):
     error: Optional[str] = None
     log_url: Optional[str] = Field(default=None, description="Deep-link to the platform's log viewer.")
     extra: Dict[str, Any] = Field(default_factory=dict)
+
+
+# Concrete envelope types — named subclasses of the generic so call sites
+# can be explicit about what they return without writing the generic
+# parameter every time.
+
+
+class ListJobsResult(PaginatedScheduledResult[ScheduledJob]):
+    """Paginated response from ``BaseSchedulerAdapter.list_jobs``."""
+
+
+class ListRunsResult(PaginatedScheduledResult[JobRun]):
+    """Paginated response from ``BaseSchedulerAdapter.list_job_runs``."""

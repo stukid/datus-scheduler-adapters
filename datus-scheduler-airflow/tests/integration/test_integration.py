@@ -16,7 +16,6 @@ import uuid
 from typing import List
 
 import pytest
-
 from datus_scheduler_airflow.adapter import AirflowSchedulerAdapter
 from datus_scheduler_core.exceptions import (
     SchedulerJobConflictError,
@@ -63,9 +62,7 @@ class TestConnection:
 
 
 class TestSubmitJob:
-    def test_submit_creates_dag(
-        self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]
-    ) -> None:
+    def test_submit_creates_dag(self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]) -> None:
         name = _unique_job_name("submit")
         payload = SchedulerJobPayload(
             job_name=name,
@@ -83,9 +80,7 @@ class TestSubmitJob:
         assert job.status in (JobStatus.ACTIVE, JobStatus.PAUSED)
         assert job.locator.get("dag_id") == job.job_id
 
-    def test_submit_conflict_raises(
-        self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]
-    ) -> None:
+    def test_submit_conflict_raises(self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]) -> None:
         name = _unique_job_name("conflict")
         payload = SchedulerJobPayload(
             job_name=name,
@@ -121,13 +116,13 @@ class TestSubmitJob:
 
 
 class TestGetJob:
-    def test_get_existing_job(
-        self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]
-    ) -> None:
+    def test_get_existing_job(self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]) -> None:
         name = _unique_job_name("get_job")
         payload = SchedulerJobPayload(
-            job_name=name, sql="SELECT 1",
-            db_connection={"url": "sqlite:///:memory:"}, schedule=None,
+            job_name=name,
+            sql="SELECT 1",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
         )
         submitted = adapter.submit_job(payload)
         cleanup_dag.append(submitted.job_id)
@@ -142,13 +137,13 @@ class TestGetJob:
 
 
 class TestListJobs:
-    def test_list_returns_jobs(
-        self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]
-    ) -> None:
+    def test_list_returns_jobs(self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]) -> None:
         name = _unique_job_name("list")
         payload = SchedulerJobPayload(
-            job_name=name, sql="SELECT 1",
-            db_connection={"url": "sqlite:///:memory:"}, schedule=None,
+            job_name=name,
+            sql="SELECT 1",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
         )
         job = adapter.submit_job(payload)
         cleanup_dag.append(job.job_id)
@@ -159,13 +154,13 @@ class TestListJobs:
 
 
 class TestPauseResume:
-    def test_pause_and_resume(
-        self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]
-    ) -> None:
+    def test_pause_and_resume(self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]) -> None:
         name = _unique_job_name("pause_resume")
         payload = SchedulerJobPayload(
-            job_name=name, sql="SELECT 1",
-            db_connection={"url": "sqlite:///:memory:"}, schedule=None,
+            job_name=name,
+            sql="SELECT 1",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
         )
         job = adapter.submit_job(payload)
         cleanup_dag.append(job.job_id)
@@ -186,13 +181,13 @@ class TestPauseResume:
 
 
 class TestTriggerJob:
-    def test_trigger_creates_run(
-        self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]
-    ) -> None:
+    def test_trigger_creates_run(self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]) -> None:
         name = _unique_job_name("trigger")
         payload = SchedulerJobPayload(
-            job_name=name, sql="SELECT 1 AS v",
-            db_connection={"url": "sqlite:///:memory:"}, schedule=None,
+            job_name=name,
+            sql="SELECT 1 AS v",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
         )
         job = adapter.submit_job(payload)
         cleanup_dag.append(job.job_id)
@@ -200,12 +195,14 @@ class TestTriggerJob:
         run = adapter.trigger_job(job.job_id)
         assert run.run_id
         assert run.job_id == job.job_id
-        assert run.status in (RunStatus.RUNNING, RunStatus.PENDING, RunStatus.SUCCESS, RunStatus.QUEUED
-                               if hasattr(RunStatus, "QUEUED") else RunStatus.PENDING)
+        assert run.status in (
+            RunStatus.RUNNING,
+            RunStatus.PENDING,
+            RunStatus.SUCCESS,
+            RunStatus.QUEUED if hasattr(RunStatus, "QUEUED") else RunStatus.PENDING,
+        )
 
-    def test_trigger_and_wait_success(
-        self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]
-    ) -> None:
+    def test_trigger_and_wait_success(self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]) -> None:
         """Full end-to-end: submit → trigger → wait for terminal state."""
         name = _unique_job_name("e2e")
         payload = SchedulerJobPayload(
@@ -222,19 +219,18 @@ class TestTriggerJob:
         final_status = _wait_for_run_terminal(adapter, job.job_id, run.run_id, max_wait=120)
 
         assert final_status == RunStatus.SUCCESS, (
-            f"DAG run ended with {final_status!r} instead of SUCCESS. "
-            "Check the Airflow logs for details."
+            f"DAG run ended with {final_status!r} instead of SUCCESS. Check the Airflow logs for details."
         )
 
 
 class TestListJobRuns:
-    def test_list_runs_after_trigger(
-        self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]
-    ) -> None:
+    def test_list_runs_after_trigger(self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str]) -> None:
         name = _unique_job_name("list_runs")
         payload = SchedulerJobPayload(
-            job_name=name, sql="SELECT 1",
-            db_connection={"url": "sqlite:///:memory:"}, schedule=None,
+            job_name=name,
+            sql="SELECT 1",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
         )
         job = adapter.submit_job(payload)
         cleanup_dag.append(job.job_id)
@@ -248,20 +244,22 @@ class TestListJobRuns:
 
 
 class TestUpdateJob:
-    def test_update_changes_sql(
-        self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str], dags_folder
-    ) -> None:
+    def test_update_changes_sql(self, adapter: AirflowSchedulerAdapter, cleanup_dag: List[str], dags_folder) -> None:
         name = _unique_job_name("update")
         original = SchedulerJobPayload(
-            job_name=name, sql="SELECT 1 AS original",
-            db_connection={"url": "sqlite:///:memory:"}, schedule=None,
+            job_name=name,
+            sql="SELECT 1 AS original",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
         )
         job = adapter.submit_job(original)
         cleanup_dag.append(job.job_id)
 
         updated_payload = SchedulerJobPayload(
-            job_name=name, sql="SELECT 2 AS updated",
-            db_connection={"url": "sqlite:///:memory:"}, schedule=None,
+            job_name=name,
+            sql="SELECT 2 AS updated",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
         )
         adapter.update_job(job.job_id, updated_payload)
 
@@ -275,8 +273,10 @@ class TestDeleteJob:
     def test_delete_removes_dag(self, adapter: AirflowSchedulerAdapter, dags_folder) -> None:
         name = _unique_job_name("delete")
         payload = SchedulerJobPayload(
-            job_name=name, sql="SELECT 1",
-            db_connection={"url": "sqlite:///:memory:"}, schedule=None,
+            job_name=name,
+            sql="SELECT 1",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
         )
         job = adapter.submit_job(payload)
 

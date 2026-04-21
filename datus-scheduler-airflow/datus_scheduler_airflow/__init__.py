@@ -1,8 +1,9 @@
 # Copyright 2025-present DatusAI, Inc.
 # Licensed under the Apache License, Version 2.0.
 
-from datus_scheduler_airflow.adapter import AirflowSchedulerAdapter
 from datus_scheduler_core.config import AirflowConfig
+
+from datus_scheduler_airflow.adapter import AirflowSchedulerAdapter
 
 __version__ = "0.1.0"
 __all__ = ["AirflowSchedulerAdapter", "AirflowConfig", "register"]
