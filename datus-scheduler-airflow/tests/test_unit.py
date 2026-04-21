@@ -856,14 +856,17 @@ class TestAirflowConfigMultiTenant:
             )
         )
         assert cfg.dags_folder == str(tmp_path / "reports-team")
-        # Hyphens sanitized in the prefix (dag_id must be [a-z0-9_])
-        assert cfg.dag_id_prefix == "reports_team__"
+        # ``project_name`` is a filesystem namespace only — it no longer
+        # auto-derives ``dag_id_prefix``. Teams wanting list-level
+        # isolation must set ``dag_id_prefix`` explicitly.
+        assert cfg.dag_id_prefix == ""
 
     def test_env_var_fallback_for_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATUS_AIRFLOW_DAGS_ROOT", str(tmp_path))
         cfg = AirflowConfig(**self._base_kwargs(project_name="team-b"))
         assert cfg.dags_folder == str(tmp_path / "team-b")
-        assert cfg.dag_id_prefix == "team_b__"
+        # No auto-derived prefix — project_name is strictly filesystem.
+        assert cfg.dag_id_prefix == ""
 
     def test_mutual_exclusion_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="set either 'dags_folder'"):
@@ -1054,6 +1057,9 @@ class TestAdapterMultiTenant:
             password="admin",
             dags_folder_root=str(tmp_path),
             project_name="team-a",
+            # dag_id_prefix is no longer auto-derived from project_name —
+            # multi-tenant list/guard tests must enable it explicitly.
+            dag_id_prefix="team_a__",
         )
         adp = self._make_adapter(cfg)
         assert adp._to_dag_id("daily sales") == "team_a__daily_sales"
@@ -1069,6 +1075,9 @@ class TestAdapterMultiTenant:
             password="admin",
             dags_folder_root=str(tmp_path),
             project_name="team-a",
+            # dag_id_prefix is no longer auto-derived from project_name —
+            # multi-tenant list/guard tests must enable it explicitly.
+            dag_id_prefix="team_a__",
         )
         adp = self._make_adapter(cfg)
 
@@ -1113,6 +1122,9 @@ class TestAdapterMultiTenant:
             password="admin",
             dags_folder_root=str(tmp_path),
             project_name="team-a",
+            # dag_id_prefix is no longer auto-derived from project_name —
+            # multi-tenant list/guard tests must enable it explicitly.
+            dag_id_prefix="team_a__",
         )
         adp = self._make_adapter(cfg)
 
@@ -1175,6 +1187,9 @@ class TestAdapterMultiTenant:
             password="admin",
             dags_folder_root=str(tmp_path),
             project_name="team-a",
+            # dag_id_prefix is no longer auto-derived from project_name —
+            # multi-tenant list/guard tests must enable it explicitly.
+            dag_id_prefix="team_a__",
         )
         adp = self._make_adapter(cfg)
 
@@ -1236,6 +1251,9 @@ class TestAdapterMultiTenant:
             password="admin",
             dags_folder_root=str(tmp_path),
             project_name="team-a",
+            # dag_id_prefix is no longer auto-derived from project_name —
+            # multi-tenant list/guard tests must enable it explicitly.
+            dag_id_prefix="team_a__",
         )
         adp = self._make_adapter(cfg)
 
@@ -1261,6 +1279,9 @@ class TestAdapterMultiTenant:
             password="admin",
             dags_folder_root=str(tmp_path),
             project_name="team-a",
+            # dag_id_prefix is no longer auto-derived from project_name —
+            # multi-tenant list/guard tests must enable it explicitly.
+            dag_id_prefix="team_a__",
         )
         adp = self._make_adapter(cfg)
 
@@ -1276,6 +1297,9 @@ class TestAdapterMultiTenant:
             password="admin",
             dags_folder_root=str(tmp_path),
             project_name="team-a",
+            # dag_id_prefix is no longer auto-derived from project_name —
+            # multi-tenant list/guard tests must enable it explicitly.
+            dag_id_prefix="team_a__",
         )
         adp = self._make_adapter(cfg)
 
