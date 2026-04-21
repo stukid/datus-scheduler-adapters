@@ -128,9 +128,7 @@ class AirflowConfig(SchedulerConnectionConfig):
         # or '..foo' would escape dags_folder_root when joined. Reject these
         # explicitly rather than relying on later Path normalization.
         if self.project_name is not None and (
-            self.project_name in (".", "..")
-            or self.project_name.startswith(".")
-            or ".." in self.project_name
+            self.project_name in (".", "..") or self.project_name.startswith(".") or ".." in self.project_name
         ):
             raise ValueError(
                 f"AirflowConfig.project_name {self.project_name!r} is not allowed: "

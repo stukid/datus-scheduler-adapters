@@ -372,17 +372,20 @@ class TestSubmitJobMocked:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
+            "total_entries": 2,
             "dags": [
                 {"dag_id": "dag1", "is_paused": False},
                 {"dag_id": "dag2", "is_paused": True},
-            ]
+            ],
         }
         adp._session.get.return_value = mock_resp
 
-        jobs = adp.list_jobs()
-        assert len(jobs) == 2
-        assert jobs[0].job_id == "dag1"
-        assert jobs[1].status == JobStatus.PAUSED
+        page = adp.list_jobs()
+        # Single-tenant mode: total_entries from Airflow flows through as-is.
+        assert page.total == 2
+        assert len(page.items) == 2
+        assert page.items[0].job_id == "dag1"
+        assert page.items[1].status == JobStatus.PAUSED
 
     def test_delete_job_removes_file_and_calls_api(self, tmp_path: Path) -> None:
         adp = self._make_adapter(tmp_path)
@@ -450,6 +453,7 @@ class TestSubmitJobMocked:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
+            "total_entries": 2,
             "dag_runs": [
                 {
                     "dag_run_id": "run_1",
@@ -463,15 +467,18 @@ class TestSubmitJobMocked:
                     "start_date": "2024-01-02T00:00:00Z",
                     "end_date": None,
                 },
-            ]
+            ],
         }
         adp._session.get.return_value = mock_resp
 
-        runs = adp.list_job_runs("daily_report")
-        assert len(runs) == 2
-        assert runs[0].run_id == "run_1"
-        assert runs[0].status == RunStatus.SUCCESS
-        assert runs[1].status == RunStatus.RUNNING
+        page = adp.list_job_runs("daily_report")
+        # Airflow returns total_entries for dag-run pagination the same way it
+        # does for dags — envelope exposes it as ``total``.
+        assert page.total == 2
+        assert len(page.items) == 2
+        assert page.items[0].run_id == "run_1"
+        assert page.items[0].status == RunStatus.SUCCESS
+        assert page.items[1].status == RunStatus.RUNNING
 
     def test_list_job_runs_raises_not_found(self, tmp_path: Path) -> None:
         adp = self._make_adapter(tmp_path)
@@ -1085,11 +1092,14 @@ class TestAdapterMultiTenant:
         }
         adp._session.get.return_value = resp
 
-        jobs = adp.list_jobs()
+        page = adp.list_jobs()
 
         # Only the two team_a DAGs should come back
-        assert len(jobs) == 2
-        returned_ids = {j.job_id for j in jobs}
+        assert len(page.items) == 2
+        # Multi-tenant mode drops upstream total because it counts other
+        # tenants' DAGs too, which doesn't match what this caller sees.
+        assert page.total is None
+        returned_ids = {j.job_id for j in page.items}
         assert returned_ids == {"team_a__foo", "team_a__bar"}
 
         # dag_id_pattern is NOT sent to the server because Airflow interprets
@@ -1128,9 +1138,9 @@ class TestAdapterMultiTenant:
         }
         adp._session.get.return_value = resp
 
-        jobs = adp.list_jobs()
+        page = adp.list_jobs()
 
-        assert {j.job_id for j in jobs} == {"team_a__legit"}
+        assert {j.job_id for j in page.items} == {"team_a__legit"}
 
     def test_list_jobs_no_prefix_filter_in_legacy_mode(self, tmp_path: Path) -> None:
         """Legacy dags_folder-only config should not filter list_jobs."""
@@ -1147,15 +1157,18 @@ class TestAdapterMultiTenant:
         resp = MagicMock()
         resp.status_code = 200
         resp.json.return_value = {
+            "total_entries": 2,
             "dags": [
                 {"dag_id": "any_dag", "is_paused": False},
                 {"dag_id": "another", "is_paused": False},
-            ]
+            ],
         }
         adp._session.get.return_value = resp
 
-        jobs = adp.list_jobs()
-        assert len(jobs) == 2
+        page = adp.list_jobs()
+        assert len(page.items) == 2
+        # Legacy/single-tenant mode passes server total through.
+        assert page.total == 2
 
         # No dag_id_pattern sent to Airflow
         call_kwargs = adp._session.get.call_args.kwargs
@@ -1197,7 +1210,8 @@ class TestAdapterMultiTenant:
         }
         adp._session.get.return_value = resp
 
-        jobs = adp.list_jobs(status=JobStatus.ACTIVE, limit=3)
+        page = adp.list_jobs(status=JobStatus.ACTIVE, limit=3)
+        jobs = page.items
         assert len(jobs) == 3
         assert all(j.status == JobStatus.ACTIVE for j in jobs)
         assert [j.job_id for j in jobs] == [
@@ -1217,9 +1231,7 @@ class TestAdapterMultiTenant:
             ("get_run_log", ("run_xyz",)),
         ],
     )
-    def test_tenant_guard_rejects_foreign_dag_id(
-        self, tmp_path: Path, method_name: str, extra_args: tuple
-    ) -> None:
+    def test_tenant_guard_rejects_foreign_dag_id(self, tmp_path: Path, method_name: str, extra_args: tuple) -> None:
         """Exact-id operations must refuse to act on another tenant's DAG.
 
         Without this guard a caller that knows (or guesses) another tenant's

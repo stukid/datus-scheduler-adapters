@@ -2,10 +2,18 @@
 # Licensed under the Apache License, Version 2.0.
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from datus_scheduler_core.config import SchedulerConnectionConfig
-from datus_scheduler_core.models import JobRun, JobStatus, RunStatus, ScheduledJob, SchedulerJobPayload
+from datus_scheduler_core.models import (
+    JobRun,
+    JobStatus,
+    ListJobsResult,
+    ListRunsResult,
+    RunStatus,
+    ScheduledJob,
+    SchedulerJobPayload,
+)
 
 
 class BaseSchedulerAdapter(ABC):
@@ -140,7 +148,7 @@ class BaseSchedulerAdapter(ABC):
         status: Optional[JobStatus] = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> List[ScheduledJob]:
+    ) -> ListJobsResult:
         """List jobs on the platform.
 
         Args:
@@ -149,6 +157,12 @@ class BaseSchedulerAdapter(ABC):
             status:  Optional status filter.
             limit:   Maximum number of results.
             offset:  Pagination offset.
+
+        Returns:
+            ``ListJobsResult`` with ``items`` (the rows for this page) and
+            ``total`` (the upstream full count when the platform exposes it,
+            or ``None`` when client-side filtering like ``dag_id_prefix``
+            makes the server-reported total meaningless).
         """
         ...
 
@@ -164,8 +178,13 @@ class BaseSchedulerAdapter(ABC):
         status: Optional[RunStatus] = None,
         limit: int = 20,
         offset: int = 0,
-    ) -> List[JobRun]:
-        """Return run history for a job, newest first."""
+    ) -> ListRunsResult:
+        """Return run history for a job, newest first.
+
+        Returns:
+            ``ListRunsResult`` with ``items`` (run rows for this page) and
+            ``total`` (the upstream run count when the platform exposes it).
+        """
         ...
 
     def get_run_log(self, job_id: str, run_id: str) -> str:

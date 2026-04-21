@@ -22,13 +22,11 @@ Environment variables (override defaults if needed):
 """
 
 import os
-import subprocess
 import time
 from pathlib import Path
 
 import httpx
 import pytest
-
 from datus_scheduler_airflow.adapter import AirflowSchedulerAdapter
 from datus_scheduler_core.config import AirflowConfig
 
@@ -73,11 +71,7 @@ def airflow_ready() -> bool:
     """Wait for Airflow to be healthy.  Skip the session if it never comes up."""
     ready = _wait_for_airflow()
     if not ready:
-        pytest.skip(
-            "Airflow is not available at "
-            f"{AIRFLOW_URL}. "
-            "Run: docker compose up -d  (from datus-airflow/)"
-        )
+        pytest.skip(f"Airflow is not available at {AIRFLOW_URL}. Run: docker compose up -d  (from datus-airflow/)")
     return True
 
 

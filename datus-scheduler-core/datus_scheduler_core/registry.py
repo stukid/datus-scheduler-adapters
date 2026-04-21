@@ -102,9 +102,7 @@ class SchedulerAdapterRegistry:
                 return
             raise
         except Exception as exc:
-            raise SchedulerException(
-                f"Failed to load scheduler adapter '{platform}': {exc}"
-            ) from exc
+            raise SchedulerException(f"Failed to load scheduler adapter '{platform}': {exc}") from exc
 
     @classmethod
     def discover_adapters(cls) -> None:
