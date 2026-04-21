@@ -41,17 +41,14 @@ class AirflowConfig(SchedulerConnectionConfig):
 
     Two deployment modes are supported:
 
-    * **Shared-root mode** (recommended for multi-tenant deployments):
-      set ``dags_folder_root`` (or env ``DATUS_AIRFLOW_DAGS_ROOT``) to the
-      Airflow scheduler's ``AIRFLOW__CORE__DAGS_FOLDER``, and ``project_name``
-      to the Datus project identifier. The adapter writes DAG files into
-      ``{dags_folder_root}/{project_name}/`` and prefixes every ``dag_id``
-      with the sanitized project name to avoid collisions across Datus
-      instances sharing the same Airflow cluster.
-
+    * **Shared-root mode**: set ``dags_folder_root`` (or env
+      ``DATUS_AIRFLOW_DAGS_ROOT``) plus ``project_name``. The adapter writes
+      DAG files under ``{dags_folder_root}/{project_name}/``.
     * **Legacy / explicit mode**: set ``dags_folder`` to a fixed absolute
-      path. Suitable for single-tenant deployments or when an operator
-      wants full control over where DAG files land.
+      path.
+
+    For read isolation (this Datus instance only sees DAGs it authored), set
+    ``dag_id_prefix`` explicitly.
 
     Exactly one of ``dags_folder`` / ``dags_folder_root`` must resolve at
     validation time.
@@ -85,19 +82,19 @@ class AirflowConfig(SchedulerConnectionConfig):
     project_name: Optional[str] = Field(
         default=None,
         description=(
-            "Datus project identifier, used as (a) subdirectory name under "
-            "dags_folder_root and (b) source for the dag_id prefix. Required "
-            "when dags_folder_root is used (explicitly or via env var). "
+            "Datus project identifier, used as subdirectory name under "
+            "dags_folder_root so each project's DAG files stay isolated on "
+            "disk. Required when dags_folder_root is used. "
             "Must match ^[A-Za-z0-9_.\\-]+$."
         ),
     )
     dag_id_prefix: Optional[str] = Field(
         default=None,
         description=(
-            "Prefix prepended to every dag_id written by this instance. "
-            "When unset (None), defaults to '{project_name}__' with "
-            "non-[a-z0-9_] characters sanitized to '_'. Set to '' to disable "
-            "prefixing (single-tenant deployments only)."
+            "Optional prefix prepended to every dag_id written by this "
+            "instance and used to filter list/read calls. Unset or '' means "
+            "no prefixing and list_jobs sees every DAG in the cluster. "
+            "Must match ^[a-z0-9_]+__$ when set."
         ),
     )
 
@@ -157,16 +154,8 @@ class AirflowConfig(SchedulerConnectionConfig):
                 )
             self.dags_folder = str(Path(root) / self.project_name)
 
-        # Derive dag_id_prefix from project_name when not explicitly set.
-        # `None` => auto-derive; `""` => user explicitly disabled.
         if self.dag_id_prefix is None:
-            if self.project_name:
-                safe = re.sub(r"[^a-z0-9_]", "_", self.project_name.lower())
-                self.dag_id_prefix = f"{safe}__"
-            else:
-                # Legacy dags_folder-only path with no project_name — preserve
-                # prior behavior of no prefixing.
-                self.dag_id_prefix = ""
+            self.dag_id_prefix = ""
 
         return self
 
