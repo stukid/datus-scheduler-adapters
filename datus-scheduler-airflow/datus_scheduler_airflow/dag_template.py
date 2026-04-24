@@ -145,21 +145,37 @@ _DAG_TEMPLATE = textwrap.dedent(
             from sqlalchemy import create_engine, text  # noqa: PLC0415
 
             engine = create_engine(connection_url)
+            columns: list = []
+            rows: list = []
+            has_more = False
+            affected: int = -1
             with engine.connect() as conn:
                 result = conn.execute(text(sql))
-                columns = list(result.keys())
-                rows = result.fetchmany(50)
-                has_more = bool(result.fetchone())
-            row_count = len(rows)
-            print("[Datus] SQL completed. preview_rows=" + str(row_count) + (", has_more=True" if has_more else ""))
+                returns_rows = result.returns_rows
+                if returns_rows:
+                    columns = list(result.keys())
+                    rows = result.fetchmany(50)
+                    has_more = bool(result.fetchone())
+                else:
+                    affected = result.rowcount if result.rowcount is not None else -1
 
-            # Print column headers and fetched rows as preview
-            if columns:
-                print("[Datus] Columns: " + " | ".join(str(c) for c in columns))
-            for i, row in enumerate(rows):
-                print("[Datus] Row " + str(i + 1) + ": " + " | ".join(str(v) for v in row))
-            if has_more:
-                print("[Datus] ... (more rows available, preview limited to 50)")
+            if returns_rows:
+                row_count = len(rows)
+                print(
+                    "[Datus] SQL completed. preview_rows="
+                    + str(row_count)
+                    + (", has_more=True" if has_more else "")
+                )
+                if columns:
+                    print("[Datus] Columns: " + " | ".join(str(c) for c in columns))
+                for i, row in enumerate(rows):
+                    print("[Datus] Row " + str(i + 1) + ": " + " | ".join(str(v) for v in row))
+                if has_more:
+                    print("[Datus] ... (more rows available, preview limited to 50)")
+            else:
+                row_count = affected if affected >= 0 else 0
+                affected_display = str(affected) if affected >= 0 else "unknown"
+                print("[Datus] SQL completed (no rowset). affected_rows=" + affected_display)
 
             return {{"status": "success", "row_count": row_count}}
 

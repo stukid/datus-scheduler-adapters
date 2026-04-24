@@ -6,13 +6,13 @@
 How to run
 ----------
 1. Start Airflow:
-       cd datus-scheduler-adapters/datus-airflow
+       cd datus-scheduler-adapters/datus-scheduler-airflow/tests/integration
        docker compose up -d
        # wait ~60s for Airflow to initialise
 
 2. Run integration tests:
        cd datus-scheduler-adapters
-       uv run pytest datus-airflow/tests/integration/ -v -m integration
+       uv run pytest datus-scheduler-airflow/tests/integration/ -v -m integration
 
 Environment variables (override defaults if needed):
     AIRFLOW_URL        Base URL of the REST API  (default: http://localhost:8080/api/v1)
@@ -39,7 +39,7 @@ if not AIRFLOW_PASSWORD:
     pytest.skip("AIRFLOW_PASSWORD env var not set", allow_module_level=True)
 
 # Default dags dir: the ./dags folder next to docker-compose.yml
-_THIS_DIR = Path(__file__).parent.parent.parent  # datus-airflow/
+_THIS_DIR = Path(__file__).parent  # tests/integration/
 AIRFLOW_DAGS_DIR = os.environ.get("AIRFLOW_DAGS_DIR", str(_THIS_DIR / "dags"))
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ def airflow_ready() -> bool:
     """Wait for Airflow to be healthy.  Skip the session if it never comes up."""
     ready = _wait_for_airflow()
     if not ready:
-        pytest.skip(f"Airflow is not available at {AIRFLOW_URL}. Run: docker compose up -d  (from datus-airflow/)")
+        pytest.skip(f"Airflow is not available at {AIRFLOW_URL}. Run: docker compose up -d  (from tests/integration/)")
     return True
 
 

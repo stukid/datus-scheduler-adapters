@@ -154,6 +154,114 @@ class TestDagTemplate:
         )
         assert '"db_connection": {}' in source
 
+    @staticmethod
+    def _load_dag_module(source: str, monkeypatch: pytest.MonkeyPatch) -> dict:
+        """Exec the generated DAG source with airflow stubbed out, return its namespace."""
+        for mod_name in (
+            "airflow",
+            "airflow.hooks",
+            "airflow.hooks.base",
+            "airflow.operators",
+            "airflow.operators.python",
+        ):
+            monkeypatch.setitem(sys.modules, mod_name, MagicMock())
+        ns: dict = {}
+        exec(compile(source, "<generated_dag>", "exec"), ns)  # noqa: S102
+        return ns
+
+    @staticmethod
+    def _install_fake_sqlalchemy(monkeypatch: pytest.MonkeyPatch, mock_result: MagicMock) -> None:
+        """Route sqlalchemy.create_engine(...).connect().__enter__().execute() to mock_result."""
+        mock_conn_ctx = MagicMock()
+        mock_conn_ctx.__enter__.return_value.execute.return_value = mock_result
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value = mock_conn_ctx
+        fake_sqlalchemy = MagicMock()
+        fake_sqlalchemy.create_engine.return_value = mock_engine
+        fake_sqlalchemy.text = MagicMock(side_effect=lambda s: s)
+        monkeypatch.setitem(sys.modules, "sqlalchemy", fake_sqlalchemy)
+
+    def test_non_rowset_sql_skips_fetchmany(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DDL / INSERT OVERWRITE returns_rows=False: must NOT call fetchmany / fetchone.
+
+        Regression guard: the template used to unconditionally call fetchmany(50),
+        which throws ResourceClosedError on statements that don't produce a rowset
+        (common on StarRocks / Hive INSERT OVERWRITE, any CREATE TABLE, etc).
+        """
+        source = render_dag_source(
+            dag_id="dml_dag",
+            job_name="DML Job",
+            sql="INSERT OVERWRITE t SELECT * FROM s",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
+            start_date=None,
+            end_date=None,
+            description=None,
+        )
+        ns = self._load_dag_module(source, monkeypatch)
+
+        mock_result = MagicMock()
+        mock_result.returns_rows = False
+        mock_result.rowcount = 42
+        self._install_fake_sqlalchemy(monkeypatch, mock_result)
+
+        out = ns["_execute_datus_sql"]()
+
+        mock_result.fetchmany.assert_not_called()
+        mock_result.fetchone.assert_not_called()
+        mock_result.keys.assert_not_called()
+        assert out == {"status": "success", "row_count": 42}
+
+    def test_rowset_sql_previews_up_to_50(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SELECT returns_rows=True: must fetchmany(50) and report len(rows) as row_count."""
+        source = render_dag_source(
+            dag_id="select_dag",
+            job_name="Select Job",
+            sql="SELECT id FROM t",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
+            start_date=None,
+            end_date=None,
+            description=None,
+        )
+        ns = self._load_dag_module(source, monkeypatch)
+
+        mock_result = MagicMock()
+        mock_result.returns_rows = True
+        mock_result.keys.return_value = ["id"]
+        mock_result.fetchmany.return_value = [(1,), (2,), (3,)]
+        mock_result.fetchone.return_value = None
+        self._install_fake_sqlalchemy(monkeypatch, mock_result)
+
+        out = ns["_execute_datus_sql"]()
+
+        mock_result.fetchmany.assert_called_once_with(50)
+        assert out == {"status": "success", "row_count": 3}
+
+    def test_non_rowset_unknown_rowcount_is_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Some dialects return rowcount=-1 for DDL; row_count must still be a non-negative int."""
+        source = render_dag_source(
+            dag_id="ddl_dag",
+            job_name="DDL Job",
+            sql="CREATE TABLE t (id INT)",
+            db_connection={"url": "sqlite:///:memory:"},
+            schedule=None,
+            start_date=None,
+            end_date=None,
+            description=None,
+        )
+        ns = self._load_dag_module(source, monkeypatch)
+
+        mock_result = MagicMock()
+        mock_result.returns_rows = False
+        mock_result.rowcount = -1
+        self._install_fake_sqlalchemy(monkeypatch, mock_result)
+
+        out = ns["_execute_datus_sql"]()
+
+        mock_result.fetchmany.assert_not_called()
+        assert out == {"status": "success", "row_count": 0}
+
 
 # ── AirflowSchedulerAdapter unit tests ───────────────────────────────────
 

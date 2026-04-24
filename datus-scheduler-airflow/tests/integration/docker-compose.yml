@@ -30,11 +30,25 @@ services:
       _AIRFLOW_DB_MIGRATE: "true"
       _AIRFLOW_WWW_USER_CREATE: "true"
       _AIRFLOW_WWW_USER_USERNAME: admin
-      _AIRFLOW_WWW_USER_PASSWORD: admin123
+      _AIRFLOW_WWW_USER_PASSWORD: admin
       _AIRFLOW_WWW_USER_FIRSTNAME: Admin
       _AIRFLOW_WWW_USER_LASTNAME: User
       _AIRFLOW_WWW_USER_EMAIL: admin@example.com
       _AIRFLOW_WWW_USER_ROLE: Admin
+
+      # Seed a StarRocks connection pointing at the host's local StarRocks
+      # instance (FE MySQL protocol on 9030). host.docker.internal is the
+      # Docker Desktop bridge back to the Mac host; extra_hosts below wires
+      # the same name on Linux hosts for portability.
+      #
+      # Only the password is env-driven (set STARROCKS_PASSWORD via shell or
+      # tests/integration/.env — see .env.example). Host/port/user/db are
+      # pinned because `host` is a Docker networking concern (not a secret)
+      # and the rest match the local StarRocks fixture.
+      AIRFLOW_CONN_STARROCKS_LOCAL: starrocks://admin:${STARROCKS_PASSWORD:?STARROCKS_PASSWORD env var is required}@host.docker.internal:9030/ac_manage
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
     volumes:
       # DAG files written by the adapter land here

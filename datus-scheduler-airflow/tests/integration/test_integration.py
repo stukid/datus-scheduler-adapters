@@ -1,13 +1,14 @@
 # Copyright 2025-present DatusAI, Inc.
 # Licensed under the Apache License, Version 2.0.
 
-"""Integration tests for datus-airflow adapter against a live Airflow instance.
+"""Integration tests for datus-scheduler-airflow adapter against a live Airflow instance.
 
-Prerequisite: run ``docker compose up -d`` from the datus-airflow/ directory
-and wait ~60 seconds for Airflow to become healthy.
+Prerequisite: run ``docker compose up -d`` from the
+``datus-scheduler-airflow/tests/integration/`` directory and wait
+~60 seconds for Airflow to become healthy.
 
 Mark: ``@pytest.mark.integration``
-Run:  ``uv run pytest datus-airflow/tests/integration/ -v -m integration``
+Run:  ``uv run pytest datus-scheduler-airflow/tests/integration/ -v -m integration``
 """
 
 import os
@@ -149,7 +150,7 @@ class TestListJobs:
         cleanup_dag.append(job.job_id)
 
         jobs = adapter.list_jobs(limit=100)
-        job_ids = [j.job_id for j in jobs]
+        job_ids = [j.job_id for j in jobs.items]
         assert job.job_id in job_ids
 
 
@@ -239,8 +240,8 @@ class TestListJobRuns:
         time.sleep(3)
 
         runs = adapter.list_job_runs(job.job_id)
-        assert len(runs) >= 1
-        assert runs[0].job_id == job.job_id
+        assert len(runs.items) >= 1
+        assert runs.items[0].job_id == job.job_id
 
 
 class TestUpdateJob:
@@ -329,6 +330,7 @@ class TestMultiTenantMode:
             password=airflow_password,
             dags_folder_root=str(dags_folder_root),
             project_name=project_name,
+            dag_id_prefix=f"{project_name}__",
             dag_discovery_timeout=90,
             dag_discovery_poll_interval=5,
         )
@@ -376,8 +378,8 @@ class TestMultiTenantMode:
             assert (dags_folder / team_b / f"{job_b.job_id}.py").exists()
 
             # Each tenant's list_jobs returns only their own DAGs
-            a_ids = {j.job_id for j in adp_a.list_jobs()}
-            b_ids = {j.job_id for j in adp_b.list_jobs()}
+            a_ids = {j.job_id for j in adp_a.list_jobs().items}
+            b_ids = {j.job_id for j in adp_b.list_jobs().items}
             assert job_a.job_id in a_ids
             assert job_a.job_id not in b_ids
             assert job_b.job_id in b_ids

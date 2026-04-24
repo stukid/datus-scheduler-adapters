@@ -39,9 +39,12 @@ print(job.job_id)
 ## Integration Tests
 
 ```bash
-# Start Airflow
+# Start Airflow (docker-compose lives next to the tests)
+cd tests/integration
 docker compose up -d
+cd ../..
 
-# Run tests
-uv run pytest tests/integration/ -v -m integration
+# Run tests (from the workspace root; AIRFLOW_PASSWORD matches
+# _AIRFLOW_WWW_USER_PASSWORD in tests/integration/docker-compose.yml)
+AIRFLOW_PASSWORD=admin uv run pytest tests/integration/ -v -m integration
 ```

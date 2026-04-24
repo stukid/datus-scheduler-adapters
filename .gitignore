@@ -32,3 +32,6 @@ uv.lock
 
 # DAG files generated during development/testing
 dags/
+
+# Local env overrides for docker compose (secrets stay out of git)
+.env
