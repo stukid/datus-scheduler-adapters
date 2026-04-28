@@ -287,13 +287,10 @@ class TestDeleteJob:
         dag_file = dags_folder / f"{job.job_id}.py"
         assert not dag_file.exists(), f"DAG file should have been removed: {dag_file}"
 
-        # Secondary check: either fully removed from DB (None) OR marked inactive
         remaining = adapter.get_job(job.job_id)
         if remaining is not None:
-            # DB record may linger until next scheduler scan; verify it's marked inactive
-            assert remaining.extra.get("is_active") is False, (
-                f"DAG '{job.job_id}' still active after delete: {remaining.extra}"
-            )
+            assert remaining.extra.get("is_active") is False
+            assert remaining.status == JobStatus.DELETED
 
     def test_delete_nonexistent_raises(self, adapter: AirflowSchedulerAdapter) -> None:
         with pytest.raises(SchedulerJobNotFoundError):

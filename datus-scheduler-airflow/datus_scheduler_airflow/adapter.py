@@ -224,6 +224,11 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
     def _build_scheduled_job(self, data: dict) -> ScheduledJob:
         dag_id: str = data["dag_id"]
         is_paused: bool = data.get("is_paused", False)
+        is_active: bool = data.get("is_active", True)
+        if not is_active:
+            status = JobStatus.DELETED
+        else:
+            status = JobStatus.PAUSED if is_paused else JobStatus.ACTIVE
         return ScheduledJob(
             scheduler_name=self._config.name,
             platform=self.platform_name(),
@@ -232,7 +237,7 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
             locator={"dag_id": dag_id},
             description=data.get("description"),
             schedule=self._extract_schedule(data),
-            status=JobStatus.PAUSED if is_paused else JobStatus.ACTIVE,
+            status=status,
             extra={k: v for k, v in data.items() if k not in ("dag_id", "dag_display_name", "is_paused")},
         )
 
@@ -459,42 +464,45 @@ class AirflowSchedulerAdapter(BaseSchedulerAdapter):
                 self._config.dag_discovery_timeout,
             )
 
-        # Step 4: Remove the DB record.
-        # Airflow's DELETE endpoint checks dag_bag (in-memory cache) which may refresh
-        # slower than DagModel.is_active. Retry with backoff to give dag_bag time to clear.
-        delete_succeeded = False
-        for attempt in range(6):
-            resp = self._session.delete(f"/dags/{job_id}")
-            if resp.status_code in (200, 204, 404):
-                delete_succeeded = True
-                break
-            if resp.status_code == 400:
-                if attempt < 5:
-                    logger.debug(
-                        "DELETE /dags/%s returned 400 (attempt %d), dag_bag may not be refreshed yet. Retrying in 5s…",
-                        job_id,
-                        attempt + 1,
-                    )
-                    time.sleep(5)
-                    continue
-                else:
-                    # dag_bag still has the entry after all retries, but the file is gone.
-                    # The DAG cannot run again; accept this as a successful delete.
-                    logger.debug(
-                        "DELETE /dags/%s returned 400 after all retries; DAG file removed, treating as deleted.", job_id
-                    )
-                    delete_succeeded = True
-                    break
-            resp.raise_for_status()
-
-        if delete_succeeded:
-            logger.info("Deleted DAG '%s' from Airflow.", job_id)
-        else:
-            logger.warning(
-                "Could not fully remove DAG '%s' metadata from Airflow (dag_bag refresh pending). "
-                "The DAG file has been deleted and will not run again.",
+        # Step 4: Best-effort metadata cleanup. Airflow's scheduler marks
+        # deleted DAG files inactive; historical metadata may remain until the
+        # API/UI/CLI delete path removes it. Treat an inactive DAG as deleted
+        # from the scheduling perspective, even if cleanup is still pending.
+        delete_requested = False
+        resp = self._session.delete(f"/dags/{job_id}")
+        if resp.status_code in (200, 204, 404):
+            delete_requested = True
+        elif resp.status_code == 400:
+            logger.debug(
+                "DELETE /dags/%s returned 400; metadata cleanup may still be pending.",
                 job_id,
             )
+        else:
+            resp.raise_for_status()
+
+        remaining = self.get_job(job_id)
+        if remaining is None:
+            logger.info("Deleted DAG '%s' from Airflow.", job_id)
+            return
+
+        active = remaining.extra.get("is_active")
+        if active is False:
+            logger.info(
+                "Deleted DAG file for '%s' and Airflow reports it inactive; metadata cleanup is pending.",
+                job_id,
+            )
+            return
+
+        status = getattr(remaining.status, "value", remaining.status)
+        if delete_requested:
+            detail = "Airflow accepted the delete request but still returns the DAG"
+        else:
+            detail = "Airflow did not accept the delete request"
+        raise SchedulerException(
+            f"{detail} '{job_id}' after its DAG file was removed "
+            f"(status={status}, is_active={active}). Deletion is incomplete because Airflow "
+            "still reports the DAG as active."
+        )
 
     def update_job(self, job_id: str, payload: SchedulerJobPayload) -> ScheduledJob:
         """Re-render and overwrite the DAG file, then wait for Airflow to reload it."""

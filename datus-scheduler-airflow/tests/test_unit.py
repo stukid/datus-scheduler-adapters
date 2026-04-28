@@ -13,6 +13,7 @@ from datus_scheduler_airflow.adapter import AirflowSchedulerAdapter, _map_run_st
 from datus_scheduler_airflow.dag_template import render_dag_source, render_spark_dag_source, render_sparksql_dag_source
 from datus_scheduler_core.config import AirflowConfig
 from datus_scheduler_core.exceptions import (
+    SchedulerException,
     SchedulerJobConflictError,
     SchedulerJobNotFoundError,
 )
@@ -475,6 +476,24 @@ class TestSubmitJobMocked:
         assert job.job_id == "daily_report"
         assert job.status == JobStatus.PAUSED
 
+    def test_get_job_maps_inactive_dag_to_deleted_status(self, tmp_path: Path) -> None:
+        adp = self._make_adapter(tmp_path)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "dag_id": "daily_report",
+            "dag_display_name": "Daily Report",
+            "is_paused": True,
+            "is_active": False,
+            "schedule_interval": "0 8 * * *",
+        }
+        adp._session.get.return_value = mock_resp
+
+        job = adp.get_job("daily_report")
+        assert job is not None
+        assert job.status == JobStatus.DELETED
+        assert job.extra["is_active"] is False
+
     def test_list_jobs(self, tmp_path: Path) -> None:
         adp = self._make_adapter(tmp_path)
         mock_resp = MagicMock()
@@ -502,7 +521,7 @@ class TestSubmitJobMocked:
         dag_file = tmp_path / "my_dag.py"
         dag_file.write_text("# dag content")
 
-        # First get = exists check; subsequent gets for _wait_for_dag_inactive return 404
+        # First get = exists check; subsequent gets cover inactive polling and final verification.
         get_exists = MagicMock()
         get_exists.status_code = 200
         get_exists.json.return_value = {"dag_id": "my_dag", "is_paused": False, "is_active": True}
@@ -510,13 +529,16 @@ class TestSubmitJobMocked:
         get_inactive = MagicMock()
         get_inactive.status_code = 404
 
+        get_deleted = MagicMock()
+        get_deleted.status_code = 404
+
         patch_resp = MagicMock()
         patch_resp.status_code = 200
 
         delete_resp = MagicMock()
         delete_resp.status_code = 204
 
-        adp._session.get.side_effect = [get_exists, get_inactive]
+        adp._session.get.side_effect = [get_exists, get_inactive, get_deleted]
         adp._session.patch.return_value = patch_resp
         adp._session.delete.return_value = delete_resp
 
@@ -533,6 +555,105 @@ class TestSubmitJobMocked:
 
         with pytest.raises(SchedulerJobNotFoundError):
             adp.delete_job("nonexistent")
+
+    def test_delete_job_succeeds_when_airflow_reports_inactive_metadata(self, tmp_path: Path) -> None:
+        adp = self._make_adapter(tmp_path)
+        dag_file = tmp_path / "my_dag.py"
+        dag_file.write_text("# dag content")
+
+        get_exists = MagicMock()
+        get_exists.status_code = 200
+        get_exists.json.return_value = {"dag_id": "my_dag", "is_paused": False, "is_active": True}
+
+        get_inactive = MagicMock()
+        get_inactive.status_code = 200
+        get_inactive.json.return_value = {"dag_id": "my_dag", "is_paused": True, "is_active": False}
+
+        get_remaining = MagicMock()
+        get_remaining.status_code = 200
+        get_remaining.json.return_value = {"dag_id": "my_dag", "is_paused": True, "is_active": False}
+
+        patch_resp = MagicMock()
+        patch_resp.status_code = 200
+
+        delete_resp = MagicMock()
+        delete_resp.status_code = 400
+
+        adp._session.get.side_effect = [get_exists, get_inactive, get_remaining]
+        adp._session.patch.return_value = patch_resp
+        adp._session.delete.return_value = delete_resp
+
+        with patch("datus_scheduler_airflow.adapter.time.sleep"):
+            adp.delete_job("my_dag")
+
+        assert not dag_file.exists()
+        assert adp._session.delete.call_count == 1
+
+    def test_delete_job_raises_when_airflow_still_reports_active_dag(self, tmp_path: Path) -> None:
+        adp = self._make_adapter(tmp_path)
+        adp._config.dag_discovery_timeout = 0
+        dag_file = tmp_path / "my_dag.py"
+        dag_file.write_text("# dag content")
+
+        get_exists = MagicMock()
+        get_exists.status_code = 200
+        get_exists.json.return_value = {"dag_id": "my_dag", "is_paused": False, "is_active": True}
+
+        get_active = MagicMock()
+        get_active.status_code = 200
+        get_active.json.return_value = {"dag_id": "my_dag", "is_paused": True, "is_active": True}
+
+        patch_resp = MagicMock()
+        patch_resp.status_code = 200
+
+        delete_resp = MagicMock()
+        delete_resp.status_code = 400
+
+        # Exists check, then final verification after the inactive wait times out.
+        adp._session.get.side_effect = [get_exists, get_active]
+        adp._session.patch.return_value = patch_resp
+        adp._session.delete.return_value = delete_resp
+
+        with (
+            patch("datus_scheduler_airflow.adapter.time.sleep"),
+            pytest.raises(SchedulerException, match="still reports the DAG as active"),
+        ):
+            adp.delete_job("my_dag")
+
+        assert not dag_file.exists()
+        assert adp._session.delete.call_count == 1
+
+    def test_delete_job_succeeds_when_delete_api_removes_metadata(self, tmp_path: Path) -> None:
+        adp = self._make_adapter(tmp_path)
+        dag_file = tmp_path / "my_dag.py"
+        dag_file.write_text("# dag content")
+
+        get_exists = MagicMock()
+        get_exists.status_code = 200
+        get_exists.json.return_value = {"dag_id": "my_dag", "is_paused": False, "is_active": True}
+
+        get_inactive = MagicMock()
+        get_inactive.status_code = 200
+        get_inactive.json.return_value = {"dag_id": "my_dag", "is_paused": True, "is_active": False}
+
+        get_deleted = MagicMock()
+        get_deleted.status_code = 404
+
+        patch_resp = MagicMock()
+        patch_resp.status_code = 200
+
+        delete_ok = MagicMock()
+        delete_ok.status_code = 204
+
+        adp._session.get.side_effect = [get_exists, get_inactive, get_deleted]
+        adp._session.patch.return_value = patch_resp
+        adp._session.delete.return_value = delete_ok
+
+        with patch("datus_scheduler_airflow.adapter.time.sleep"):
+            adp.delete_job("my_dag")
+
+        assert not dag_file.exists()
+        assert adp._session.delete.call_count == 1
 
     def test_update_job_overwrites_file(self, tmp_path: Path, sample_payload: SchedulerJobPayload) -> None:
         adp = self._make_adapter(tmp_path)
