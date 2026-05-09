@@ -135,6 +135,33 @@ prepare_dags_dir() {
   chmod 0777 "$AIRFLOW_DAGS_DIR"
 }
 
+compose_up_with_retry() {
+  local attempts="${AIRFLOW_BOOTSTRAP_ATTEMPTS:-3}"
+  local attempt=1
+  local sleep_seconds
+
+  while [ "$attempt" -le "$attempts" ]; do
+    echo "Starting Airflow compose stack (attempt $attempt/$attempts)"
+    compose_down
+    prepare_dags_dir
+
+    if docker_compose -f "$COMPOSE_FILE" up -d --build; then
+      return 0
+    fi
+
+    if [ "$attempt" -eq "$attempts" ]; then
+      echo "Airflow compose bootstrap failed after $attempts attempts." >&2
+      return 1
+    fi
+
+    sleep_seconds=$((attempt * 10))
+    echo "Airflow compose bootstrap failed; retrying in ${sleep_seconds}s." >&2
+    compose_down
+    sleep "$sleep_seconds"
+    attempt=$((attempt + 1))
+  done
+}
+
 dry_run=0
 
 while [ "$#" -gt 0 ]; do
@@ -206,9 +233,7 @@ wait_for_service_health() {
 }
 
 echo "=== Airflow integration tests ==="
-compose_down
-prepare_dags_dir
-docker_compose -f "$COMPOSE_FILE" up -d --build
+compose_up_with_retry
 wait_for_service_health airflow 900
 
 uv run --with pytest --with pytest-asyncio --package datus-scheduler-airflow pytest "$TEST_PATH" -m integration --tb=short --verbose
