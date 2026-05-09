@@ -121,12 +121,19 @@ compose_down() {
   docker_compose -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
 }
 
-export AIRFLOW_HOST_PORT="${AIRFLOW_HOST_PORT:-8080}"
+default_dags_dir="${RUNNER_TEMP:-$ROOT_DIR/.tmp}/datus-scheduler-airflow-dags"
+
+export AIRFLOW_HOST_PORT="${AIRFLOW_HOST_PORT:-18080}"
 export AIRFLOW_URL="${AIRFLOW_URL:-http://127.0.0.1:${AIRFLOW_HOST_PORT}/api/v1}"
 export AIRFLOW_USER="${AIRFLOW_USER:-admin}"
 export AIRFLOW_USERNAME="${AIRFLOW_USERNAME:-$AIRFLOW_USER}"
 export AIRFLOW_PASSWORD="${AIRFLOW_PASSWORD:-admin}"
-export AIRFLOW_DAGS_DIR="${AIRFLOW_DAGS_DIR:-$ROOT_DIR/datus-scheduler-airflow/tests/integration/dags}"
+export AIRFLOW_DAGS_DIR="${AIRFLOW_DAGS_DIR:-$default_dags_dir}"
+
+prepare_dags_dir() {
+  mkdir -p "$AIRFLOW_DAGS_DIR"
+  chmod 0777 "$AIRFLOW_DAGS_DIR"
+}
 
 dry_run=0
 
@@ -200,6 +207,7 @@ wait_for_service_health() {
 
 echo "=== Airflow integration tests ==="
 compose_down
+prepare_dags_dir
 docker_compose -f "$COMPOSE_FILE" up -d --build
 wait_for_service_health airflow 900
 
