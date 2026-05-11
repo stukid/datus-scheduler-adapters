@@ -36,15 +36,15 @@ services:
       _AIRFLOW_WWW_USER_ROLE: Admin
 
       # Seed a StarRocks connection pointing at the host's local StarRocks
-      # instance (FE MySQL protocol on 9030). host.docker.internal is the
+      # instance (FE MySQL protocol). host.docker.internal is the
       # Docker Desktop bridge back to the Mac host; extra_hosts below wires
       # the same name on Linux hosts for portability.
       #
       # The password is env-driven for real local fixtures, with a deterministic
       # non-secret default so CI can parse this compose file without extra env.
-      # Host/port/user/db are pinned because `host` is a Docker networking
-      # concern and the rest match the local StarRocks fixture.
-      AIRFLOW_CONN_STARROCKS_LOCAL: starrocks://admin:${STARROCKS_PASSWORD:-Datus2025}@host.docker.internal:9030/ac_manage
+      # Host/user/db are pinned because `host` is a Docker networking concern
+      # and the rest match the local StarRocks fixture.
+      AIRFLOW_CONN_STARROCKS_LOCAL: starrocks://admin:${STARROCKS_PASSWORD:-Datus2025}@host.docker.internal:${STARROCKS_QUERY_HOST_PORT:-9030}/ac_manage
 
     extra_hosts:
       - "host.docker.internal:host-gateway"
